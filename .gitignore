@@ -1,0 +1,50 @@
+# ── Secrets ──────────────────────────────────────────────────────────────────
+.env
+# Keep .env.example (it has no real secrets)
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# ── Type checkers & linters ───────────────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
+
+# ── Alembic ───────────────────────────────────────────────────────────────────
+# Do NOT ignore migrations/versions — those should be committed
+# alembic.ini is also committed (it has no secrets)
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
