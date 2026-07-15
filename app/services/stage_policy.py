@@ -87,24 +87,24 @@ class StagePolicy:
             return False
 
         if stage_id == StageId.S2_BASICS:
-            from app.services.text_extract import is_concrete_timing, sanitize_timing_fields
-            occ = sanitize_timing_fields(memory.get("occasion", {}) or {})
-            has_place = bool((occ.get("place") or occ.get("locationPreference") or "").strip())
-            return has_place and is_concrete_timing(occ)
+            from app.services.text_extract import get_occasion_state
+            return get_occasion_state(memory)["is_complete"]
 
         if stage_id == StageId.S3_PERSONALITY:
             from app.services.text_extract import filter_tags
             p = memory.get("personality", {})
             tags = filter_tags(p.get("tags") or [])
-            signal_count = (
-                len(p.get("culturalSignals") or [])
-                + len(p.get("relationshipSignals") or [])
-                + len(p.get("lifestyleSignals") or [])
-            )
-            return len(tags) >= 2 or (len(tags) >= 1 and signal_count >= 1)
+            # Hard rule: culturalSignals alone (often from occasion paste) never unlock S3.
+            # Need real personality tags — 2+, or 1 tag plus relationship/lifestyle (not culture-only).
+            rel = len(p.get("relationshipSignals") or [])
+            life = len(p.get("lifestyleSignals") or [])
+            return len(tags) >= 2 or (len(tags) >= 1 and (rel + life) >= 1)
 
         if stage_id == StageId.S4_VIBE:
             from app.domain.memory_schema import resolve_primary_vibe
+            # Cannot complete vibe (and brief) without a real personality stage fill
+            if not StagePolicy.is_stage_complete(StageId.S3_PERSONALITY.value, memory):
+                return False
             return bool(resolve_primary_vibe(memory))
 
         if stage_id == StageId.S6_DIRECTIONS:
@@ -197,14 +197,13 @@ class StagePolicy:
         if ai_decision_type == StageDecisionType.REANCHOR.value:
             return StageDecisionType.REANCHOR.value, current_stage, "reanchor"
 
-        # Clarification only while stage is incomplete
+        # Clarification: always honor — never auto-advance past agent rejection
         if ai_decision_type == StageDecisionType.REQUEST_CLARIFICATION.value:
-            if not StagePolicy.is_stage_complete(current_stage, memory):
-                return (
-                    StageDecisionType.REQUEST_CLARIFICATION.value,
-                    current_stage,
-                    "need_clarification",
-                )
+            return (
+                StageDecisionType.REQUEST_CLARIFICATION.value,
+                current_stage,
+                "need_clarification",
+            )
 
         # Do not advance while the model still has open questions for this stage
         if open_questions and ai_decision_type == StageDecisionType.ADVANCE.value:
@@ -296,37 +295,42 @@ class StagePolicy:
         stage_context = {
             StageId.S2_BASICS.value: {
                 "goal": (
-                    "Understand occasion basics: where and when. Need place/setting PLUS a concrete "
-                    "month or named season (Winter/Summer/Monsoon/Spring). Vague weather is not enough. "
-                    "Note early personality hints in conversation but do not advance for them."
+                    "Capture where and when. Warm, clear questions — vary wording on gibberish. "
+                    "On advance, transition to personality (who the couple is), not venue setting."
                 ),
                 "memoryPatchHint": (
-                    'Patch occasion only: {"place": "...", "datePreference": "September", '
-                    '"settingPreference": "beach", "destinationMode": "local|destination|unknown"}. '
-                    "Do NOT write personality.tags or vibe here."
+                    'Valid: {"occasion": {"place": "...", "datePreference": "March 2026", ...}}. '
+                    "Gibberish → {} + request_clarification. Never personality/vibe here."
                 ),
                 "advanceCondition": (
-                    "place (or setting) + concrete month OR named season "
-                    "(not 'cold weather' / 'not sure')"
+                    "place + concrete month/season; advance reply asks about the COUPLE (s3), "
+                    "not setting or directions"
                 ),
                 "stateless": True,
             },
             StageId.S3_PERSONALITY.value: {
-                "goal": "Capture personality tags and cultural/relationship/lifestyle signals from committed input.",
-                "memoryPatchHint": (
-                    'Patch personality: {"tags": ["..."], "culturalSignals": [], '
-                    '"relationshipSignals": [], "lifestyleSignals": [], "plannerInterpretation": "..."}'
+                "goal": (
+                    "Capture who the couple is. YOU validate tags — reject gibberish; "
+                    "only meaningful personality/culture/relationship signals enter memoryPatch."
                 ),
-                "advanceCondition": "2+ personality tags or 1 tag + cultural signals",
+                "memoryPatchHint": (
+                    'If valid: {"personality": {"tags": ["Foodies", "..."], '
+                    '"culturalSignals": [], "relationshipSignals": [], "lifestyleSignals": []}}. '
+                    "If gibberish or unclear: memoryPatch = {} and request_clarification."
+                ),
+                "advanceCondition": "2+ meaningful personality tags (never cities/dates/gibberish)",
                 "stateless": False,
             },
             StageId.S4_VIBE.value: {
-                "goal": "Confirm primary vibe, energy, formality, and family role.",
-                "memoryPatchHint": (
-                    'Patch vibe: {"primaryVibe": "...", "secondaryVibes": [], "energyLevel": "...", '
-                    '"formality": "...", "familyRole": "...", "plannerInterpretation": "..."}'
+                "goal": (
+                    "Confirm primary vibe from chip pool. Acknowledge earlySignals.vibe "
+                    "from memory when present."
                 ),
-                "advanceCondition": "primaryVibe confirmed",
+                "memoryPatchHint": (
+                    'If valid: {"vibe": {"primaryVibe": "Big & festive", ...}}. '
+                    "Never city/month as primaryVibe. Gibberish → {} + request_clarification."
+                ),
+                "advanceCondition": "primaryVibe is a pool label; personality already filled",
                 "stateless": False,
             },
             StageId.S7_EVENTS.value: {

@@ -43,6 +43,8 @@ async def health_check():
         "status": "ok",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "model": settings.OLLAMA_MODEL,
+        "llmProvider": settings.llm_provider,
+        "model": settings.active_chat_model,
+        "embeddingProvider": settings.EMBEDDING_PROVIDER,
         "embeddingModel": settings.OLLAMA_EMBEDDING_MODEL,
     }

@@ -92,18 +92,20 @@ def fresh_memory() -> dict:
 
 
 def resolve_primary_vibe(memory: dict) -> str:
-    """Primary vibe from canonical memory, committed chips, or mis-filed personality tags."""
+    """Primary vibe from canonical memory or committed chips — pool labels only."""
     from app.domain.chip_pools import get_chip_pool
     from app.domain.enums import StageId
+    from app.services.text_extract import is_valid_primary_vibe, normalize_primary_vibe
 
     vibe = memory.get("vibe") or {}
     primary = (vibe.get("primaryVibe") or "").strip()
-    if primary:
-        return primary
+    if primary and is_valid_primary_vibe(primary):
+        return normalize_primary_vibe(primary) or primary
 
     committed = (memory.get("committedSelections") or {}).get("vibe") or []
-    if committed and isinstance(committed[0], str):
-        return committed[0].strip()
+    for chip in committed:
+        if isinstance(chip, str) and is_valid_primary_vibe(chip):
+            return normalize_primary_vibe(chip) or chip.strip()
 
     pool_map = {v.lower(): v for v in get_chip_pool(StageId.S4_VIBE.value)}
     for tag in (memory.get("personality") or {}).get("tags") or []:
@@ -118,7 +120,7 @@ def build_selected_chips(memory: dict) -> dict:
     Committed chip selections derived from canonical memory.
     Used for UI restore after page reload.
     """
-    from app.services.text_extract import filter_tags
+    from app.services.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
 
     personality = memory.get("personality", {})
     vibe = memory.get("vibe", {})
@@ -127,9 +129,19 @@ def build_selected_chips(memory: dict) -> dict:
     committed = memory.get("committedSelections", {})
 
     vibe_chips = []
-    if vibe.get("primaryVibe"):
-        vibe_chips.append(vibe["primaryVibe"])
-    vibe_chips.extend(vibe.get("secondaryVibes") or [])
+    primary = resolve_primary_vibe(memory)
+    if primary:
+        vibe_chips.append(primary)
+    for s in vibe.get("secondaryVibes") or []:
+        if isinstance(s, str) and is_valid_primary_vibe(s):
+            mapped = normalize_primary_vibe(s) or s
+            if mapped.lower() not in {v.lower() for v in vibe_chips}:
+                vibe_chips.append(mapped)
+    if not vibe_chips:
+        for chip in committed.get("vibe") or []:
+            if isinstance(chip, str) and is_valid_primary_vibe(chip):
+                mapped = normalize_primary_vibe(chip) or chip
+                vibe_chips.append(mapped)
 
     selected_id = direction.get("selectedDirectionId") or committed.get("directionId", "")
     direction_name = committed.get("directionName", "")
@@ -145,7 +157,7 @@ def build_selected_chips(memory: dict) -> dict:
 
     return {
         "personality": personality_tags,
-        "vibe": filter_tags(vibe_chips) or committed.get("vibe", []),
+        "vibe": vibe_chips,
         "events": logistics.get("events") or committed.get("events", []),
         "directionId": selected_id,
         "directionName": direction_name,
@@ -154,17 +166,24 @@ def build_selected_chips(memory: dict) -> dict:
 
 def update_committed_selections(memory: dict, patch: dict) -> dict:
     """Merge patch into committedSelections for UI restore."""
+    from app.services.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
+
     selections = copy.deepcopy(memory.get("committedSelections", {}))
     if "personality" in patch:
-        tags = patch["personality"].get("tags")
+        tags = filter_tags(patch["personality"].get("tags") or [])
         if tags:
             selections["personality"] = tags
     if "vibe" in patch:
         vibe = patch["vibe"]
         chips = []
-        if vibe.get("primaryVibe"):
-            chips.append(vibe["primaryVibe"])
-        chips.extend(vibe.get("secondaryVibes") or [])
+        primary = vibe.get("primaryVibe")
+        if primary and is_valid_primary_vibe(primary):
+            chips.append(normalize_primary_vibe(primary) or primary)
+        for s in vibe.get("secondaryVibes") or []:
+            if isinstance(s, str) and is_valid_primary_vibe(s):
+                mapped = normalize_primary_vibe(s) or s
+                if mapped.lower() not in {c.lower() for c in chips}:
+                    chips.append(mapped)
         if chips:
             selections["vibe"] = chips
     if "logistics" in patch and patch["logistics"].get("events"):

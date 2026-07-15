@@ -111,6 +111,28 @@ def detect_upstream_correction(
     ):
         return None
 
+    # Occasion-only tweaks while collecting personality/vibe (rehash of place/date)
+    # must not trigger correctionAck / false brief regen
+    if (
+        changed_sections == ["occasion"]
+        and current_stage in (
+            StageId.S3_PERSONALITY.value,
+            StageId.S4_VIBE.value,
+            StageId.S5_BRIEF.value,
+        )
+    ):
+        before_occ = memory_before.get("occasion") or {}
+        after_occ = memory_after.get("occasion") or {}
+        material = False
+        for key in ("place", "datePreference"):
+            b = (before_occ.get(key) or "").strip().lower()
+            a = (after_occ.get(key) or "").strip().lower()
+            if a and a != b:
+                material = True
+                break
+        if not material:
+            return None
+
     mapped = [s for s in changed_sections if s in _SECTION_TO_STAGE]
     if not mapped:
         return None

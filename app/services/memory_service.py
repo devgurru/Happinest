@@ -116,6 +116,17 @@ class MemoryService:
         # Merge
         new_memory = deep_merge(current.memory_json, patch)
 
+        # Fold legacy top-level occasion fields into occasion.{...}
+        from app.services.text_extract import get_occasion_state
+        occ_state = get_occasion_state(new_memory)
+        new_memory["occasion"] = occ_state["occasion"]
+        for legacy_key in (
+            "place", "datePreference", "seasonPreference",
+            "locationPreference", "settingPreference", "destinationMode",
+        ):
+            if legacy_key in new_memory and legacy_key != "occasion":
+                new_memory.pop(legacy_key, None)
+
         # Compute stale sections
         new_stale = compute_stale_sections(patch, current.stale_sections)
         if extra_stale:

@@ -10,11 +10,16 @@ FastAPI + PostgreSQL + Ollama AI-powered wedding planning consultant.
 
 ## Setup
 
+**New machine?** See **[../SETUP_GUIDE.md](../SETUP_GUIDE.md)** for PostgreSQL, migrations, seed data, and Ollama.
+
 ```bash
 # From the backend/ directory:
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
+alembic upgrade head
+python -m app.seeds.seed_runner
 ```
 
 ## Environment
@@ -23,10 +28,21 @@ Copy `.env.example` → `.env` and fill in your values:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://root:root@localhost:5432/wedding_ai_db
+
+# Switch chat provider: ollama | grok
+LLM_PROVIDER=ollama
+
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=gemma3:latest
+
+# Only needed when LLM_PROVIDER=grok
+GROK_API_KEY=
+GROK_MODEL=grok-3-mini
+
 DEBUG=true
 ```
+
+See [SETUP_GUIDE.md](../SETUP_GUIDE.md) for full provider switching notes.
 
 ## Run
 

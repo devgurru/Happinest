@@ -1,0 +1,212 @@
+"""
+Stage rules for the conversation agent.
+
+These are injected into the LLM prompt so the agent owns:
+- what is valid input for this stage
+- what may enter memoryPatch (canonical memory)
+- when to stay / advance / request_clarification / reanchor
+
+Backend applies the agent's memoryPatch as-is when the agent decided
+to commit data. Clarification / gibberish turns must leave memoryPatch empty.
+"""
+from __future__ import annotations
+
+from app.domain.enums import StageId
+
+# Shared across every stage
+GLOBAL_AGENT_RULES = """
+## AGENT MEMORY OWNERSHIP (all stages)
+You decide what enters canonical memory via memoryPatch. Follow these invariants:
+
+1. ONLY patch fields listed in this stage's MEMORY CONTRACT.
+2. If the message is gibberish, random keystrokes, nonsense, or unintelligible
+   (e.g. "Asdfasidfu asg", "akdjlkasdjlf"):
+   - stageDecision.type = "request_clarification"
+   - memoryPatch MUST be {} (empty object — NEVER copy garbage into tags or any field)
+   - Warmly say you did not understand, then re-ask THIS stage's goal in fresh wording
+     (vary every time — never a fixed script; never mention directions unless on s6).
+3. If stageDecision.type is "request_clarification" OR "stay" because you did not
+   understand → memoryPatch MUST be {}.
+4. Never put cities, months, years, full sentences, or vibe adjectives into
+   personality.tags.
+5. Never put cities, months, or personality tags into vibe.primaryVibe.
+6. Prefer chip-pool labels when a pool is provided; custom tags only when they
+   clearly describe the couple (e.g. "Foodies", "College sweethearts").
+7. Propose advance only when THIS stage's advance condition is clearly met
+   from committed meaning in the message and/or already-known memory.
+8. When earlySignals has vibe/personality for a later stage, acknowledge it
+   in plannerReply — do not silently ignore memory.
+
+## VOICE (match your best S3/S4 energy on every stage)
+- Short, warm, specific — celebrate what they share
+- Name the couple when natural (from memory.identity)
+- One clear question so they know exactly what to answer next
+- On gibberish: gentle, human, varied — never the same sentence twice in a row
+""".strip()
+
+
+STAGE_RULES: dict[str, str] = {
+    StageId.S2_BASICS.value: """
+## STAGE RULES — s2_basics (occasion)
+GOAL: Capture where + when.
+
+ACCEPT → memoryPatch.occasion only:
+- place: real city/region (Delhi, Goa, Udaipur, …)
+- datePreference: concrete month (optionally year), e.g. "March 2026"
+- seasonPreference: only if they named a season (Winter/Summer/Monsoon/Spring)
+- settingPreference: beach / palace / garden only when clearly said
+- destinationMode: local | destination | unknown
+
+REJECT (do not patch; stay or request_clarification):
+- Vague timing alone: "cold weather", "nice weather", "not sure", "sometime"
+- Gibberish / random text
+- Personality or vibe words alone (park nothing in personality/vibe here)
+
+EARLY HINTS: "big festive", "foodies", "north indian" may be mentioned in
+plannerReply but go ONLY into earlySignals via conversation — do NOT put them
+in personality.tags or vibe.primaryVibe on this stage. You may omit early
+signals from memoryPatch (backend may park them); you must still NOT write
+personality/vibe patches.
+
+ADVANCE when: place (or clear setting) AND (concrete month OR named season).
+On ADVANCE to s3_personality, plannerReply must:
+- Acknowledge place + date specifically (e.g. "March 2026 in Delhi")
+- Ask about the COUPLE (personality, roots, interests, love story) — NOT venue setting,
+  NOT "what setting do you have in mind", NOT design directions
+- If earlySignals has vibe (e.g. Big & festive), you may mention you'll explore vibe soon
+Otherwise stay and ask only for the missing piece (if place known, ask month — never re-ask place).
+
+GIBBERISH on s2: request_clarification + {}. Vary wording from your last reply. Light humor OK once.
+""".strip(),
+
+    StageId.S3_PERSONALITY.value: """
+## STAGE RULES — s3_personality
+GOAL: Who the couple is — real personality / culture / relationship signals.
+
+ACCEPT → memoryPatch.personality:
+- tags: short meaningful labels from the chip pool OR clear custom phrases
+  (e.g. "Foodies", "Travel lovers", "College sweethearts", "Punjabi family")
+- culturalSignals / relationshipSignals / lifestyleSignals when clear
+- Prefer 2+ tags before advancing
+
+REJECT → memoryPatch MUST be {}:
+- Gibberish / random keystrokes ("Asdfasidfu asg")
+- Cities, months, years (Delhi, March, 2026)
+- Occasion rehash ("Delhi, March 2026 — big festive…") — stay; ask about
+  the couple, do not create personality tags from that paste
+- Vibe-only phrases ("festive", "intimate") — note in reply, do not tag as personality
+- Single meaningless word fragments
+
+If you cannot interpret the message: request_clarification + empty memoryPatch.
+
+ADVANCE when: at least 2 meaningful personality tags (or 1 tag + clear
+relationship/lifestyle signal). Culture word alone is not enough.
+""".strip(),
+
+    StageId.S4_VIBE.value: """
+## STAGE RULES — s4_vibe
+GOAL: Confirm emotional direction / primary vibe.
+
+ACCEPT → memoryPatch.vibe:
+- primaryVibe: MUST be a vibe chip-pool label
+  (e.g. "Big & festive", "Intimate", "Traditional & rooted")
+- secondaryVibes, energyLevel, formality, familyRole when clear
+
+REJECT → empty memoryPatch:
+- Gibberish
+- City / month as vibe ("Delhi", "March")
+- Occasion rehash paste — ask vibe question; if earlySignals.vibe exists,
+  ask "You mentioned Big & festive earlier — keep or change?"
+- Personality chips in vibe fields
+
+MEMORY LOOKUP: If earlySignals.vibe or vibe.primaryVibe already set, acknowledge
+it in plannerReply instead of a blank "what's the vibe?"
+
+ADVANCE when: primaryVibe is a valid pool label AND personality was already
+filled in earlier turns (do not invent missing personality).
+""".strip(),
+
+    StageId.S5_BRIEF.value: """
+## STAGE RULES — s5_brief
+GOAL: Present / refine the couple brief. Synthesis owns brief text generation.
+
+ACCEPT: light occasion/personality/vibe corrections via reanchor patches only
+when the client explicitly corrects something.
+Do not invent new brief fields in conversation_turn unless correcting.
+
+If they ask for directions → that is a synthesis path (backend may divert).
+Otherwise stay and confirm the brief.
+""".strip(),
+
+    StageId.S6_DIRECTIONS.value: """
+## STAGE RULES — s6_directions
+GOAL: User picks one design direction option.
+
+ACCEPT → memoryPatch.direction:
+- selectedDirectionId / selectedDirectionName matching a listed option
+
+REJECT:
+- Do NOT patch occasion.place with a direction name (e.g. "Delhi Rooftop")
+- Do not rewrite personality/vibe from a direction pick
+
+ADVANCE when: a listed direction is clearly selected → ask for wedding functions next.
+""".strip(),
+
+    StageId.S7_EVENTS.value: """
+## STAGE RULES — s7_events
+GOAL: Which functions/events they want.
+
+ACCEPT → memoryPatch.logistics.events (list of event names from pool when possible).
+Set logistics.eventsConfirmed = true ONLY when they say the list is final
+("that's all", "only these", "lock it in").
+
+REJECT: personality/vibe patches; gibberish; aesthetic/color talk as events.
+
+ADVANCE when: ≥1 event AND eventsConfirmed.
+""".strip(),
+
+    StageId.S8_GUESTS.value: """
+## STAGE RULES — s8_guests
+GOAL: Guest count for EVERY event in logistics.events.
+
+ACCEPT → memoryPatch.logistics.guestCounts: { "EventName": number }
+
+REJECT: personality/vibe; missing counts for some events → stay and ask for missing ones.
+
+ADVANCE when: every event has a positive integer count.
+""".strip(),
+
+    StageId.S9_BUDGET.value: """
+## STAGE RULES — s9_budget
+GOAL: Comfortable total budget range.
+
+ACCEPT → memoryPatch.logistics.budget: { "range": "40-60 lakhs", "currency": "INR" }
+
+REJECT: gibberish; vendor lists; vague "not sure" without a range → stay and clarify.
+
+ADVANCE when: budget.range is set.
+""".strip(),
+
+    StageId.S10_VENDORS.value: """
+## STAGE RULES — s10_vendors
+GOAL: Vendor category priorities.
+
+ACCEPT → memoryPatch.logistics.vendorPreferences (keyed preferences).
+
+REJECT: gibberish; rewriting earlier occasion/personality unless explicit correction.
+
+ADVANCE when: at least one vendor preference is committed.
+""".strip(),
+
+    StageId.S11_SUMMARY.value: """
+## STAGE RULES — s11_summary
+GOAL: Confirm final summary. Synthesis owns summary text.
+Conversation: minor corrections only; prefer reanchor + empty novelty.
+""".strip(),
+}
+
+
+def get_stage_rules(stage: str) -> str:
+    """Full agent rule block for the current stage."""
+    specific = STAGE_RULES.get(stage, "Patch only fields relevant to this stage. Reject gibberish.")
+    return f"{GLOBAL_AGENT_RULES}\n\n{specific}"

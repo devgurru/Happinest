@@ -9,6 +9,7 @@ import string
 from pathlib import Path
 
 from app.domain.chip_pools import format_chip_pool_for_prompt
+from app.domain.stage_rules import get_stage_rules
 from app.services.stage_policy import StagePolicy
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -52,23 +53,42 @@ def build_conversation_turn_prompt(
     stage_ctx = StagePolicy.get_stage_prompt_context(stage)
     chip_pool_str = format_chip_pool_for_prompt(stage)
 
-    # S2 is stateless — no conversation history per architecture doc 03
-    use_history = stage != "s2_basics" and not stage_ctx.get("stateless", False)
+    # Include recent turns for all stages (S2 needs this to avoid repeating clarification)
+    history_limit = 8 if stage == "s2_basics" else 12
     history_lines = []
-    if use_history:
-        for msg in recent_messages:
-            role_label = "Client" if msg["role"] in ("client", "user") else "Planner"
-            history_lines.append(f"{role_label}: {msg['content']}")
+    for msg in recent_messages[-history_limit:]:
+        role_label = "Client" if msg["role"] in ("client", "user") else "Planner"
+        content = (msg.get("content") or "").strip()
+        if content:
+            history_lines.append(f"{role_label}: {content}")
+
+    last_planner = "(none yet — first reply on this stage)"
+    for msg in reversed(recent_messages):
+        if msg.get("role") in ("planner", "assistant"):
+            text = (msg.get("content") or "").strip()
+            if text:
+                last_planner = text
+                break
+
+    identity = memory.get("identity") or {}
+    client = (identity.get("clientName") or "").strip()
+    partner = (identity.get("partnerName") or "").strip()
+    if client and partner:
+        client_names = f"{client} & {partner}"
+    else:
+        client_names = client or partner or "the couple"
 
     system_content = template.safe_substitute(
         stage=stage,
         stage_goal=stage_ctx.get("goal", "Gather information for this stage."),
         memory_patch_hint=stage_ctx.get("memoryPatchHint", "Patch only fields relevant to this stage."),
         advance_condition=stage_ctx.get("advanceCondition", "When enough information is captured."),
+        stage_rules=get_stage_rules(stage),
         memory_json=json.dumps(_slim_memory(memory, stage), indent=2),
         chip_pool=chip_pool_str or "None defined for this stage",
-        history_count=len(history_lines),
-        history="\n".join(history_lines) if history_lines else "(No prior history — stateless stage)",
+        client_names=client_names,
+        last_planner_reply=last_planner,
+        history="\n".join(history_lines) if history_lines else "(first message on this stage)",
     )
 
     # Gemma3 doesn't reliably follow system-only JSON instructions.

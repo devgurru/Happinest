@@ -51,6 +51,7 @@ from app.services.response_validator import validate_ai_response, validate_synth
 from app.services.session_service import SessionService
 from app.services.stage_policy import StagePolicy
 from app.services.patch_sanitizer import sanitize_memory_patch
+from app.services.planner_reply_policy import align_planner_reply
 from app.services.turn_interpreter import enrich_memory_patch, merge_patches
 from app.services.turn_intent import TurnIntent, classify_turn_intent
 from app.services.response_sanitizer import sanitize_ai_response
@@ -140,9 +141,8 @@ async def process_s1_names(
 
     # Save the planner welcome message
     welcome = (
-        f"Lovely to meet you both — {client_name} and {partner_name}! "
-        f"I'm so excited to help you plan your wedding. Let's start by getting to know "
-        f"a bit about what you have in mind. Where are you thinking of having the wedding?"
+        f"Lovely to meet you both, {client_name} and {partner_name}! 💕 "
+        f"What wedding destination are you dreaming of, and what time of year are you planning for?"
     )
     await SessionService.append_message(
         db,
@@ -471,12 +471,14 @@ async def _execute_synthesis(
     ai_result: dict | None = None
     telemetry: dict = {}
     error_code: str | None = None
+    error_message: str | None = None
 
     try:
         ai_result, telemetry = await call_llm(messages, stage, EventType.SYNTHESIS_REQUEST.value)
     except AIGatewayError as e:
         error_code = e.code
-        telemetry = {"model": settings.OLLAMA_MODEL}
+        error_message = e.message
+        telemetry = {"model": settings.active_chat_model, "provider": settings.llm_provider}
 
     if error_code or not ai_result:
         await log_ai_turn(
@@ -487,7 +489,10 @@ async def _execute_synthesis(
             failure_code=error_code or "UNKNOWN",
             validation_status="rejected",
         )
-        return _make_error_response(request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED")
+        return _make_error_response(
+            request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED",
+            message=error_message or "Something went wrong. Please try again.",
+        )
 
     is_valid, val_error = validate_synthesis_response(ai_result, synthesis_type)
     if not is_valid:
@@ -628,18 +633,18 @@ async def process_conversation_turn(
 
     # Client message saved after patch (below) so selectedChips snapshot is accurate
 
-    # 4. Load recent history for prompt (exclude the message just saved)
+    # 4. Load recent history for prompt (client message for this turn is not saved yet)
     all_messages = await SessionService.get_recent_messages(db, session_id, limit=21)
     history_for_prompt = [
         {"role": m.role, "content": m.content_text}
-        for m in all_messages[:-1]  # exclude the just-saved client message
+        for m in all_messages
     ]
 
     # 5. Build prompt
     messages = build_conversation_turn_prompt(
         stage=stage,
         memory=memory,
-        recent_messages=history_for_prompt[-settings.MAX_HISTORY_MESSAGES:],
+        recent_messages=history_for_prompt,
         user_message=user_message,
     )
 
@@ -647,12 +652,18 @@ async def process_conversation_turn(
     telemetry: dict = {}
     ai_result: dict | None = None
     error_code: str | None = None
+    error_message: str | None = None
 
     try:
         ai_result, telemetry = await call_llm(messages, stage, EventType.CONVERSATION_TURN.value)
     except AIGatewayError as e:
         error_code = e.code
-        telemetry = {"model": settings.OLLAMA_MODEL, "http_status": e.http_status}
+        error_message = e.message
+        telemetry = {
+            "model": settings.active_chat_model,
+            "provider": settings.llm_provider,
+            "http_status": e.http_status,
+        }
 
     if error_code or not ai_result:
         await log_ai_turn(
@@ -666,7 +677,10 @@ async def process_conversation_turn(
             validation_status="rejected",
             failure_code=error_code or "UNKNOWN",
         )
-        return _make_error_response(request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED")
+        return _make_error_response(
+            request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED",
+            message=error_message or "Something went wrong. Please try again.",
+        )
 
     # 6b. Sanitize model output (fix invalid stage ids like s6_personality)
     ai_result = sanitize_ai_response(ai_result, stage, turn_intent)
@@ -686,16 +700,55 @@ async def process_conversation_turn(
         )
         return _make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
 
-    # 8. Enrich + apply memory patch (intent layer + interpreter + AI)
-    ai_patch = ai_result.get("memoryPatch", {})
-    if turn_intent.suggested_patch:
+    # 8. Agent-owned memory: honor clarification = empty patch; apply agent patch lightly
+    ai_patch = dict(ai_result.get("memoryPatch") or {})
+    sd_type = (ai_result.get("stageDecision") or {}).get("type", "")
+
+    # Agent decided input was unclear / gibberish → NEVER write to canonical memory
+    if sd_type == StageDecisionType.REQUEST_CLARIFICATION.value:
+        ai_patch = {}
+    # Gibberish user text: even if model forgot empty patch, drop commits
+    from app.services.text_extract import looks_like_gibberish
+    if looks_like_gibberish(user_message):
+        ai_patch = {}
+        # Force clarification stay if model still tried to advance with mash input
+        if sd_type == StageDecisionType.ADVANCE.value:
+            ai_result["stageDecision"] = {
+                "type": StageDecisionType.REQUEST_CLARIFICATION.value,
+                "stage": stage,
+            }
+            sd_type = StageDecisionType.REQUEST_CLARIFICATION.value
+
+    if turn_intent.suggested_patch and sd_type != StageDecisionType.REQUEST_CLARIFICATION.value:
         ai_patch = merge_patches(turn_intent.suggested_patch, ai_patch)
-    patch = enrich_memory_patch(
-        stage, user_message, ai_patch, memory
-    )
-    patch = sanitize_memory_patch(
-        patch, stage=stage, message=user_message, memory=memory
-    )
+
+    # Prefer agent's memoryPatch; enrich only fills structural gaps (place/month/chips)
+    # when agent already committed a non-empty patch for this stage — skip enrich on empty.
+    if ai_patch:
+        patch = enrich_memory_patch(stage, user_message, ai_patch, memory)
+        patch = sanitize_memory_patch(
+            patch, stage=stage, message=user_message, memory=memory
+        )
+    else:
+        # Empty agent patch: still allow deterministic S2 fill from clear place/month text
+        # (agent may forget structure) — never invent personality/vibe from garbage.
+        if (
+            stage == StageId.S2_BASICS.value
+            and not looks_like_gibberish(user_message)
+            and sd_type != StageDecisionType.REQUEST_CLARIFICATION.value
+        ):
+            patch = enrich_memory_patch(stage, user_message, {}, memory)
+            patch = sanitize_memory_patch(
+                patch, stage=stage, message=user_message, memory=memory
+            )
+            # Only keep occasion / earlySignals for S2 — drop anything else
+            patch = {
+                k: v for k, v in patch.items()
+                if k in ("occasion", "earlySignals")
+            }
+        else:
+            patch = {}
+
     open_questions = ai_result.get("openQuestions", [])
     updated_version = mem_version.version_no
     stale_sections = list(ai_result.get("staleSections", []))
@@ -805,6 +858,8 @@ async def process_conversation_turn(
         stage == StageId.S4_VIBE.value
         and final_stage == StageId.S5_BRIEF.value
         and not correction
+        and StagePolicy.is_stage_complete(StageId.S3_PERSONALITY.value, memory)
+        and StagePolicy.is_stage_complete(StageId.S4_VIBE.value, memory)
     ):
         brief_result = await _execute_synthesis(
             db, session, session_id, SynthesisType.BRIEF.value,
@@ -906,70 +961,21 @@ async def process_conversation_turn(
         and not re.search(r"guestcount|_guests$|_estimate", str(s.get("label", "")), re.I)
     ]
 
-    # 12. Save planner reply
-    planner_reply = ai_result.get("plannerReply", "")
-
-    # S6 → S7: after picking a direction, ask about events (not aesthetics)
-    direction_selected_this_turn = bool(
-        (patch or {}).get("direction", {}).get("selectedDirectionId")
-    )
-    direction_selected = direction_selected_this_turn or bool(
-        (memory.get("direction") or {}).get("selectedDirectionId")
-    )
-    if (
-        final_stage == StageId.S7_EVENTS.value
-        and direction_selected
-        and stage in (StageId.S6_DIRECTIONS.value, StageId.S7_EVENTS.value)
-    ):
-        dname = (memory.get("direction") or {}).get("selectedDirectionName") or "that direction"
-        events = memory.get("logistics", {}).get("events") or []
-        if not events or direction_selected_this_turn:
-            planner_reply = (
-                f"Wonderful — {dname} is a great fit! "
-                f"Which wedding functions would you like to include? "
-                f"You can pick from the suggestions or tell me in your own words."
-            )
-
-    # S7: keep focus on events until confirmed
-    if final_stage == StageId.S7_EVENTS.value or stage == StageId.S7_EVENTS.value:
-        if not (memory.get("logistics") or {}).get("eventsConfirmed"):
-            events = (memory.get("logistics") or {}).get("events") or []
-            if events:
-                planner_reply = (
-                    f"So far I have {', '.join(events)} — "
-                    f"would you like to add any other functions, or shall we lock this in?"
-                )
-
-    # Acknowledge early personality signals when entering S3
-    if (
-        final_stage == StageId.S3_PERSONALITY.value
-        and stage == StageId.S2_BASICS.value
-    ):
-        early = memory.get("earlySignals") or {}
-        early_p = early.get("personality") or []
-        if early_p and not early.get("acknowledged"):
-            planner_reply = (
-                f"Noted earlier that you mentioned {', '.join(early_p)} — "
-                f"want to keep those and add more, or refine them? "
-                + planner_reply
-            )
-
+    # 12. Planner reply — backend aligns copy to FINAL stage (chips already do this)
+    # Root cause of S2-text-on-S3: LLM is prompted on current stage; StagePolicy advances after.
+    correction_ack = ""
     if correction:
-        ack = _summarize_correction_for_reply(correction, memory_before, memory)
-        if ack:
-            # After upstream correction, ask a question for the CURRENT stage
-            stage_q = {
-                StageId.S3_PERSONALITY.value: "Want to refine your personality tags further?",
-                StageId.S4_VIBE.value: "Does the vibe still feel right, or want to adjust it?",
-                StageId.S6_DIRECTIONS.value: "Take a look at the refreshed directions — which feels closest?",
-                StageId.S7_EVENTS.value: "Which functions should we include?",
-                StageId.S8_GUESTS.value: "What guest counts are you thinking for each event?",
-                StageId.S9_BUDGET.value: "What budget range feels comfortable?",
-                StageId.S10_VENDORS.value: "Any vendor priorities to add?",
-            }.get(final_stage, "")
-            planner_reply = f"{ack} {stage_q or planner_reply}".strip()
-        else:
-            planner_reply = planner_reply
+        correction_ack = _summarize_correction_for_reply(correction, memory_before, memory)
+
+    planner_reply = align_planner_reply(
+        ai_reply=ai_result.get("plannerReply", "") or "",
+        from_stage=stage,
+        to_stage=final_stage,
+        decision_type=final_decision_type,
+        memory=memory,
+        correction=correction,
+        correction_ack=correction_ack,
+    )
 
     await SessionService.append_message(
         db,

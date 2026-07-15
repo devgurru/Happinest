@@ -11,9 +11,29 @@ from app.domain.enums import StageId
 from app.services.text_extract import (
     extract_early_signals,
     extract_month_or_season,
+    extract_place_from_message,
+    extract_vibe_label,
     filter_tags,
+    is_valid_primary_vibe,
+    looks_like_occasion_rehash,
+    normalize_primary_vibe,
     sanitize_timing_fields,
 )
+
+
+def _merge_unique_raw(base: list, extra: list) -> list:
+    """Dedupe string lists without personality junk filtering (cultural signals, vibes)."""
+    seen: set[str] = set()
+    merged: list = []
+    for item in base + extra:
+        if not item or not isinstance(item, str):
+            continue
+        key = item.lower().strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item.strip())
+    return merged
 from app.services.turn_intent import _extract_added_tags
 from app.services.ui_hints import build_vendor_chip_pool, chips_mentioned_in_message
 from app.services.stage_policy import StagePolicy
@@ -147,8 +167,10 @@ def enrich_memory_patch(stage: str, user_message: str, patch: dict, memory: dict
 
     # Concrete month spoken on the wrong stage → occasion, never personality
     timing = extract_month_or_season(message)
+    place_hit = extract_place_from_message(message)
+    occasion_rehash = looks_like_occasion_rehash(message, memory)
+
     if timing and stage_id != StageId.S2_BASICS:
-        # Pure date answer while on S3/S4 (common when S2 wrongly advanced)
         msg_l = message.lower().strip()
         mostly_date = bool(
             re.fullmatch(
@@ -158,17 +180,23 @@ def enrich_memory_patch(stage: str, user_message: str, patch: dict, memory: dict
                 msg_l,
             )
         ) or (timing.get("datePreference") and len(message.split()) <= 6)
-        if mostly_date or stage_id in (StageId.S3_PERSONALITY, StageId.S4_VIBE):
+        if mostly_date or (occasion_rehash and stage_id in (StageId.S3_PERSONALITY, StageId.S4_VIBE)):
+            # Updating known occasion is OK; never confuse with personality/vibe commit
             occ = dict(patch.get("occasion") or memory.get("occasion") or {})
             occ.update(timing)
+            if place_hit:
+                occ["place"] = place_hit
             patch["occasion"] = sanitize_timing_fields(occ)
-            if mostly_date and stage_id == StageId.S3_PERSONALITY:
-                # Do not treat this turn as a personality commitment
+            if stage_id == StageId.S3_PERSONALITY:
                 patch.pop("personality", None)
+            # Don't wipe a *valid* vibe extract on S4 if message also has place/date —
+            # festive phrase may be the intent. handled below.
 
     if stage_id == StageId.S2_BASICS:
         occasion = dict(patch.get("occasion") or memory.get("occasion") or {})
-        if not occasion.get("place"):
+        if place_hit:
+            occasion["place"] = place_hit
+        elif not occasion.get("place"):
             for city in (
                 "Delhi", "Mumbai", "Udaipur", "Jaipur", "Goa", "Bangalore",
                 "Chennai", "Hyderabad", "Kolkata", "Agra", "Jodhpur",
@@ -182,103 +210,173 @@ def enrich_memory_patch(stage: str, user_message: str, patch: dict, memory: dict
 
         early = extract_early_signals(message)
         for k, v in (early.get("occasionHints") or {}).items():
-            occasion.setdefault(k, v)
+            # Only beach-style setting hints — never cultural adjectives
+            if k == "settingPreference" and v == "beach":
+                occasion.setdefault(k, v)
 
         occasion = sanitize_timing_fields(occasion)
         patch["occasion"] = occasion
 
-        # Persist early personality/vibe hints without advancing those stages
-        if early.get("personality") or early.get("vibe"):
+        if early.get("personality") or early.get("vibe") or early.get("culturalSignals"):
             signals = dict(memory.get("earlySignals") or {})
             signals["personality"] = _merge_unique(
                 signals.get("personality") or [], early.get("personality") or []
             )
-            signals["vibe"] = _merge_unique(
-                signals.get("vibe") or [], early.get("vibe") or []
+            signals["vibe"] = _merge_unique_raw(
+                [v for v in (signals.get("vibe") or []) if is_valid_primary_vibe(v)],
+                early.get("vibe") or [],
+            )
+            signals["culturalSignals"] = _merge_unique_raw(
+                signals.get("culturalSignals") or [], early.get("culturalSignals") or []
             )
             signals["acknowledged"] = False
             patch["earlySignals"] = signals
-            # Strip any personality/vibe the model prematurely wrote during S2
             patch.pop("personality", None)
             patch.pop("vibe", None)
 
     elif stage_id == StageId.S3_PERSONALITY:
         pool = get_chip_pool(stage)
-        found = _extract_added_tags(message, pool)
-        # Seed from early signals once if user confirms / hasn't committed yet
+        found = filter_tags(_extract_added_tags(message, pool))
         early = memory.get("earlySignals") or {}
-        early_tags = early.get("personality") or []
+        early_tags = filter_tags(early.get("personality") or [])
         personality = dict(patch.get("personality") or {})
-        existing = memory.get("personality", {}).get("tags") or []
+        existing = filter_tags(memory.get("personality", {}).get("tags") or [])
 
-        is_correction = any(
-            c in message.lower() for c in ("add ", "also", "actually", "change", "sorry", "update")
-        )
-        if "," in message and len(found) >= 2 and not is_correction:
-            personality["tags"] = found
-        elif found:
-            personality["tags"] = _merge_unique(
-                personality.get("tags") or [],
-                _merge_unique(existing, found),
+        # Hard rule: re-pasting S2 place/date blurb is NOT a personality answer
+        if occasion_rehash and not found:
+            patch.pop("personality", None)
+            early_now = extract_early_signals(message)
+            if early_now.get("vibe") or early_now.get("culturalSignals"):
+                signals = dict(early)
+                signals["vibe"] = _merge_unique_raw(
+                    [v for v in (signals.get("vibe") or []) if is_valid_primary_vibe(v)],
+                    early_now.get("vibe") or [],
+                )
+                signals["culturalSignals"] = _merge_unique_raw(
+                    signals.get("culturalSignals") or [], early_now.get("culturalSignals") or []
+                )
+                patch["earlySignals"] = signals
+        else:
+            is_correction = any(
+                c in message.lower() for c in ("add ", "also", "actually", "change", "sorry", "update")
             )
-        elif early_tags and not existing:
-            # Suggest early signals into memory only when user affirms vaguely
-            if any(w in message.lower() for w in ("yes", "that", "those", "sounds", "keep", "same")):
-                personality["tags"] = filter_tags(early_tags)
+            if "," in message and len(found) >= 2 and not is_correction:
+                personality["tags"] = found
+            elif found:
+                personality["tags"] = _merge_unique(
+                    personality.get("tags") or [],
+                    _merge_unique(existing, found),
+                )
+            elif early_tags and not existing:
+                if any(w in message.lower() for w in ("yes", "that", "those", "sounds", "keep", "same")):
+                    personality["tags"] = filter_tags(early_tags)
 
-        if personality.get("tags"):
-            personality["tags"] = filter_tags(personality["tags"])
-            patch["personality"] = personality
-            if early_tags:
-                patch["earlySignals"] = {
-                    **early,
-                    "acknowledged": True,
-                    "personality": early_tags,
-                }
+            # Never keep AI tags that are cities / junk
+            if personality.get("tags"):
+                personality["tags"] = filter_tags(personality["tags"])
+            # Cultural signals: only keep if they look real and not invented location dumps
+            if personality.get("culturalSignals"):
+                personality["culturalSignals"] = [
+                    s for s in personality["culturalSignals"]
+                    if isinstance(s, str) and s.strip().lower() not in (
+                        "delhi", "mumbai", "goa", "festive", "wedding",
+                    )
+                ]
+            if personality.get("tags"):
+                patch["personality"] = personality
+                if early_tags:
+                    patch["earlySignals"] = {
+                        **early,
+                        "acknowledged": True,
+                        "personality": early_tags,
+                    }
+            else:
+                patch.pop("personality", None)
+
+        # S3 must never write vibe from occasion paste
+        patch.pop("vibe", None)
 
     elif stage_id in (StageId.S4_VIBE, StageId.S6_DIRECTIONS):
-        pool = get_chip_pool(stage)
-        found = _extract_added_tags(message, pool) or chips_mentioned_in_message(message, pool)
+        if stage_id == StageId.S6_DIRECTIONS:
+            sel = direction_selection_patch(message, memory)
+            if sel:
+                patch.update(sel)
+                patch.pop("occasion", None)
+                patch.pop("personality", None)
+                patch.pop("vibe", None)
+                return patch
+
+        pool = get_chip_pool(StageId.S4_VIBE.value)
+        found = chips_mentioned_in_message(message, pool)
         vibe = dict(patch.get("vibe") or {})
         mem_vibe = memory.get("vibe") or {}
-        primary = vibe.get("primaryVibe") or mem_vibe.get("primaryVibe") or ""
-        secondary = list(vibe.get("secondaryVibes") or mem_vibe.get("secondaryVibes") or [])
         early_vibe = (memory.get("earlySignals") or {}).get("vibe") or []
         is_add = any(c in message.lower() for c in ("add ", "also", "along with", "as well", "update my vibe"))
-        add_m = re.search(r"(?:add|include)\s+(.+?)(?:\s+as well|\s+too|\s*$)", message, re.I)
-        if is_add and add_m:
-            extra = add_m.group(1).strip().strip(".")
-            if extra and extra.lower() not in {s.lower() for s in secondary}:
-                secondary.append(extra[0].upper() + extra[1:] if extra else extra)
-            if primary:
-                vibe["primaryVibe"] = primary
-            if secondary:
-                vibe["secondaryVibes"] = secondary
-        elif found:
-            if is_add and primary:
-                for f in found:
-                    if f.lower() != primary.lower() and f.lower() not in {s.lower() for s in secondary}:
-                        secondary.append(f)
-                vibe["primaryVibe"] = primary
+
+        # Hard rule: place+date rehash is not a vibe answer — park signals, stay on stage
+        if occasion_rehash and stage_id == StageId.S4_VIBE:
+            early_now = extract_early_signals(message)
+            if early_now.get("vibe") or early_now.get("culturalSignals"):
+                signals = dict(memory.get("earlySignals") or {})
+                signals["vibe"] = _merge_unique_raw(
+                    [v for v in (signals.get("vibe") or []) if is_valid_primary_vibe(v)],
+                    early_now.get("vibe") or [],
+                )
+                signals["culturalSignals"] = _merge_unique_raw(
+                    signals.get("culturalSignals") or [], early_now.get("culturalSignals") or []
+                )
+                patch["earlySignals"] = signals
+            patch.pop("vibe", None)
+            patch.pop("personality", None)
+        else:
+            # Prefer mapped vibe from free text (big festive → Big & festive)
+            mapped = normalize_primary_vibe(vibe.get("primaryVibe"), message) or extract_vibe_label(message)
+
+            # If AI put a city in primaryVibe, drop it
+            if vibe.get("primaryVibe") and not is_valid_primary_vibe(vibe["primaryVibe"]):
+                vibe.pop("primaryVibe", None)
+
+            add_m = re.search(r"(?:add|include)\s+(.+?)(?:\s+as well|\s+too|\s*$)", message, re.I)
+            secondary = list(vibe.get("secondaryVibes") or mem_vibe.get("secondaryVibes") or [])
+            primary = (vibe.get("primaryVibe") or mem_vibe.get("primaryVibe") or "").strip()
+            if primary and not is_valid_primary_vibe(primary):
+                primary = ""
+
+            if is_add and add_m:
+                extra = add_m.group(1).strip().strip(".")
+                mapped_extra = normalize_primary_vibe(extra, extra)
+                if mapped_extra and mapped_extra.lower() not in {s.lower() for s in secondary}:
+                    if not primary or mapped_extra.lower() != primary.lower():
+                        secondary.append(mapped_extra)
+                if primary:
+                    vibe["primaryVibe"] = primary
                 if secondary:
-                    vibe["secondaryVibes"] = secondary
-            else:
+                    vibe["secondaryVibes"] = [s for s in secondary if is_valid_primary_vibe(s)]
+            elif found:
                 vibe["primaryVibe"] = found[0]
                 if len(found) > 1:
                     vibe["secondaryVibes"] = found[1:]
-        elif "intimate" in message.lower() and not vibe.get("primaryVibe"):
-            vibe["primaryVibe"] = "Intimate"
-        elif "festive" in message.lower() and not vibe.get("primaryVibe"):
-            vibe["primaryVibe"] = "Big & festive"
-        elif "party" in message.lower() and not vibe.get("primaryVibe"):
-            vibe["primaryVibe"] = "Big & festive"
-        elif early_vibe and not vibe.get("primaryVibe") and not mem_vibe.get("primaryVibe"):
-            if any(w in message.lower() for w in ("yes", "that", "those", "sounds", "keep", "same")):
-                vibe["primaryVibe"] = early_vibe[0]
-                if len(early_vibe) > 1:
-                    vibe["secondaryVibes"] = early_vibe[1:]
-        if vibe:
-            patch["vibe"] = vibe
+            elif mapped:
+                vibe["primaryVibe"] = mapped
+            elif early_vibe and not primary:
+                if any(w in message.lower() for w in ("yes", "that", "those", "sounds", "keep", "same")):
+                    vibe["primaryVibe"] = early_vibe[0]
+                    if len(early_vibe) > 1:
+                        vibe["secondaryVibes"] = early_vibe[1:]
+
+            if vibe.get("primaryVibe"):
+                normalized = normalize_primary_vibe(vibe["primaryVibe"], message)
+                if normalized:
+                    vibe["primaryVibe"] = normalized
+                    patch["vibe"] = vibe
+                else:
+                    patch.pop("vibe", None)
+            elif vibe.get("secondaryVibes"):
+                patch["vibe"] = vibe
+            else:
+                patch.pop("vibe", None)
+
+            patch.pop("personality", None)
 
     elif stage_id == StageId.S7_EVENTS:
         pool = get_chip_pool(stage)
