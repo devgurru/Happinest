@@ -48,15 +48,12 @@ async def planner_turn(
             db,
             session_id=session_id,
             user_message=payload.message.strip(),
-            stage=payload.stage,
         )
 
     elif payload.eventType == EventType.SYNTHESIS_REQUEST.value:
         result = await process_synthesis_request(
             db,
             session_id=session_id,
-            synthesis_type=payload.synthesisType,
-            stage=payload.stage,
         )
 
     else:

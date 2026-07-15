@@ -594,7 +594,6 @@ async def process_conversation_turn(
     db: AsyncSession,
     session_id: uuid.UUID,
     user_message: str,
-    stage: str | None = None,
 ) -> dict:
     """Main pipeline for conversation_turn event type."""
     request_id = uuid.uuid4()
@@ -604,8 +603,8 @@ async def process_conversation_turn(
     if not session:
         raise ValueError(f"Session {session_id} not found")
 
-    # Backend owns current stage — client must not drive stage transitions
-    stage = stage or session.current_stage
+    # Backend owns current stage — client cannot drive stage transitions
+    stage = session.current_stage
 
     # 2. Load memory
     mem_version = await MemoryService.get_latest_memory(db, session_id)
@@ -1027,7 +1026,6 @@ async def process_synthesis_request(
     db: AsyncSession,
     session_id: uuid.UUID,
     synthesis_type: str | None = None,
-    stage: str | None = None,
 ) -> dict:
     """Pipeline for synthesis_request: brief, direction, or summary."""
     request_id = uuid.uuid4()
@@ -1036,7 +1034,7 @@ async def process_synthesis_request(
     if not session:
         raise ValueError(f"Session {session_id} not found")
 
-    stage = stage or session.current_stage
+    stage = session.current_stage
     mem_version = await MemoryService.get_latest_memory(db, session_id)
     if not mem_version:
         raise ValueError(f"No memory for session {session_id}")

@@ -125,15 +125,7 @@ class MessageOut(BaseModel):
 
 class TurnRequest(BaseModel):
     eventType: str = Field(..., description="conversation_turn | synthesis_request")
-    stage: str | None = Field(
-        None,
-        description="Optional — ignored when omitted; backend uses session.currentStage",
-    )
     message: str | None = None          # required for conversation_turn
-    synthesisType: str | None = Field(
-        None,
-        description="brief | direction | summary — inferred from session stage when omitted",
-    )
 
 
 # ── Reference ────────────────────────────────────────────────────────────────

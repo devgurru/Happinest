@@ -5,6 +5,7 @@ Keeps junk (dates, cities, sentences) out of personality/vibe chip lists.
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 
 MONTHS = (
     "january", "february", "march", "april", "may", "june",
@@ -62,6 +63,54 @@ _VIBE_ALIASES: list[tuple[tuple[str, ...], str]] = [
 ]
 
 
+_MONTH_INDEX = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def is_past_date(date_preference: str) -> bool:
+    """
+    Return True when datePreference refers to a date already in the past.
+    Checks explicit year first; falls back to month-only (assumed current year).
+    Examples that return True (assuming today >= July 2026):
+      "March 2025", "January 2026", "2024", "March" (when current month > March)
+    Examples that return False:
+      "December 2026", "December", "Winter", "March 2027"
+    """
+    if not date_preference or not isinstance(date_preference, str):
+        return False
+    text = date_preference.strip().lower()
+    today = _date.today()
+
+    # Year-only entry (e.g. "2024", "2025")
+    year_only = re.fullmatch(r"(19|20)\d{2}", text)
+    if year_only:
+        return int(text) < today.year
+
+    # Extract optional year from the string
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    year = int(year_match.group(1)) if year_match else None
+
+    # Extract month
+    month_num: int | None = None
+    for month_name, idx in _MONTH_INDEX.items():
+        if month_name in text:
+            month_num = idx
+            break
+
+    if year and month_num:
+        return _date(year, month_num, 1) < _date(today.year, today.month, 1)
+    if year:
+        return year < today.year
+    if month_num:
+        # Month only — assume current year; past if month already gone
+        return month_num < today.month
+
+    return False
+
+
 def extract_month_or_season(message: str) -> dict:
     """
     Return {datePreference?} and/or {seasonPreference?} only for concrete timing.
@@ -92,12 +141,15 @@ def extract_month_or_season(message: str) -> dict:
 
 
 def is_concrete_timing(occasion: dict) -> bool:
-    """True only when date/season is concrete enough to complete S2."""
+    """True only when date/season is concrete, future, and not vague."""
     date = (occasion.get("datePreference") or "").strip().lower()
     season = (occasion.get("seasonPreference") or "").strip().lower()
 
     if date:
         if any(vague in date for vague in VAGUE_TIMING):
+            return False
+        # Reject past dates — a wedding cannot be in the past
+        if is_past_date(date):
             return False
         if any(m in date for m in MONTHS):
             return True
@@ -114,7 +166,7 @@ def is_concrete_timing(occasion: dict) -> bool:
 
 
 def sanitize_timing_fields(occasion: dict) -> dict:
-    """Strip vague timing values that should not unlock S2 advance."""
+    """Strip vague or past timing values that should not unlock S2 advance."""
     occ = dict(occasion)
     date = (occ.get("datePreference") or "").strip().lower()
     season = (occ.get("seasonPreference") or "").strip().lower()
@@ -124,6 +176,9 @@ def sanitize_timing_fields(occasion: dict) -> dict:
             occ["datePreference"] = extracted["datePreference"]
         else:
             occ["datePreference"] = ""
+    # Strip past dates — never save a past wedding date to memory
+    if occ.get("datePreference") and is_past_date(occ["datePreference"]):
+        occ["datePreference"] = ""
     if season and not any(s in season for s in VALID_SEASONS):
         occ["seasonPreference"] = ""
     if season and any(v in season for v in VAGUE_TIMING) and not any(s in season for s in VALID_SEASONS):
