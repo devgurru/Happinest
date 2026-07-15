@@ -139,6 +139,91 @@ class StagePolicy:
         return False
 
     @staticmethod
+    def get_stage_gap_guide(stage: str, memory: dict, user_message: str = "") -> str:
+        """
+        Tell the agent what is missing and what THIS message can fill,
+        so stay/advance + question stay aligned.
+        """
+        from datetime import date
+        today = date.today().isoformat()
+        msg = (user_message or "").strip()
+
+        if stage == StageId.S2_BASICS.value:
+            from app.services.text_extract import (
+                extract_month_or_season,
+                extract_place_from_message,
+                get_occasion_state,
+                is_past_date,
+            )
+            state = get_occasion_state(memory)
+            place_in_msg = extract_place_from_message(msg) if msg else None
+            timing_in_msg = extract_month_or_season(msg) if msg else {}
+            raw_date = (timing_in_msg.get("datePreference") or "").strip()
+            season_in_msg = (timing_in_msg.get("seasonPreference") or "").strip()
+            date_past = bool(raw_date and is_past_date(raw_date))
+
+            will_have_place = state["has_place"] or bool(place_in_msg)
+            will_have_time = state["has_time"] or bool(season_in_msg) or (
+                bool(raw_date) and not date_past
+            )
+
+            notes = [f"Today: {today}."]
+            if place_in_msg:
+                notes.append(f"This message includes place → patch occasion.place=\"{place_in_msg}\".")
+            if raw_date and date_past:
+                notes.append(
+                    f"This message includes \"{raw_date}\" but that is PAST — "
+                    f"do NOT put it in datePreference. Stay and ask for a FUTURE month/year."
+                )
+            elif raw_date:
+                notes.append(
+                    f"This message includes future timing → patch occasion.datePreference=\"{raw_date}\"."
+                )
+            if season_in_msg:
+                notes.append(f"Season named → patch seasonPreference=\"{season_in_msg}\".")
+
+            if will_have_place and will_have_time:
+                notes.append(
+                    "After this patch S2 will be COMPLETE → stageDecision.type=advance, "
+                    "acknowledge place+date, ask about the COUPLE (s3). Do not ask about setting."
+                )
+                return " ".join(notes)
+
+            missing = []
+            if not will_have_place:
+                missing.append("place (city/region)")
+            if not will_have_time:
+                missing.append("future month+year (e.g. December 2026) or named season")
+            notes.append(
+                f"S2 still incomplete — need: {', '.join(missing)}. "
+                f"stageDecision.type=stay. Ask ONLY for missing fields. "
+                f"NEVER ask personality / relationship / vibe while on s2."
+            )
+            return " ".join(notes)
+
+        if stage == StageId.S3_PERSONALITY.value:
+            from app.services.text_extract import filter_tags
+            tags = filter_tags((memory.get("personality") or {}).get("tags") or [])
+            if StagePolicy.is_stage_complete(stage, memory):
+                return "S3 COMPLETE — you may advance to s4_vibe and ask about vibe."
+            return (
+                f"Have tags: {tags or '(none)'}. "
+                f"Need 2+ meaningful tags (or 1 + relationship/lifestyle). Stay; ask about the couple."
+            )
+
+        if stage == StageId.S4_VIBE.value:
+            from app.domain.memory_schema import resolve_primary_vibe
+            if resolve_primary_vibe(memory):
+                return "S4 COMPLETE — you may advance (brief synthesis follows)."
+            early = (memory.get("earlySignals") or {}).get("vibe") or []
+            hint = f" earlySignals.vibe={early}." if early else ""
+            return f"S4 INCOMPLETE — need vibe pool primaryVibe.{hint} Stay; ask vibe only."
+
+        if StagePolicy.is_stage_complete(stage, memory):
+            return f"Stage {stage} complete in memory — you may propose advance if this turn confirms it."
+        return f"Stage {stage} not complete — stay and ask only for what this stage still needs."
+
+    @staticmethod
     def events_finalize_cue(message: str) -> bool:
         """User signals the event list is complete."""
         msg_l = message.lower()
@@ -299,12 +384,15 @@ class StagePolicy:
                     "On advance, transition to personality (who the couple is), not venue setting."
                 ),
                 "memoryPatchHint": (
-                    'Valid: {"occasion": {"place": "...", "datePreference": "March 2026", ...}}. '
+                    'Valid: {"occasion": {"place": "Goa", "datePreference": "December 2026", '
+                    '"destinationMode": "destination"}}. '
+                    "If they give place + future month in one message, patch BOTH and advance. "
+                    "Past months/years must NOT enter datePreference — stay and ask for a future date. "
                     "Gibberish → {} + request_clarification. Never personality/vibe here."
                 ),
                 "advanceCondition": (
-                    "place + concrete month/season; advance reply asks about the COUPLE (s3), "
-                    "not setting or directions"
+                    "place + concrete FUTURE month/season in memory; "
+                    "advance reply asks about the COUPLE (s3), not setting"
                 ),
                 "stateless": True,
             },

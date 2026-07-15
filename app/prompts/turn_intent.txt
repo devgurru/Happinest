@@ -1,0 +1,39 @@
+Classify this wedding-planner turn. Return ONLY JSON.
+
+Current stage: $stage
+Couple: $client_names
+Slim memory:
+$memory_json
+
+User message:
+$user_message
+
+Decide what the user wants. Do not write plannerReply. Do not invent facts.
+
+intentType (pick one):
+- "gibberish" — random keyboard mash / unintelligible nonsense only
+- "help" — asking what a stage means, how chips work, whether they can type their own answer, what to do next, examples, or process questions (e.g. "what does personality mean?", "do I pick from suggestions or can I give my own?")
+- "clarification" — their answer is vague/incomplete for the stage goal but not mash and not a help question
+- "correction" — changing earlier info (place, date, personality, vibe, events) from a later stage
+- "normal" — answering the current stage with usable content
+
+IMPORTANT:
+- Questions ABOUT the process or the meaning of personality/vibe/chips = "help", NEVER "gibberish" or "clarification"
+- Typos in a real question still count as "help" or "normal", not gibberish
+
+targetSections (0+): identity | occasion | personality | vibe | direction | logistics
+Only when they want to update data. Help questions → []
+
+decisionHint:
+- gibberish → request_clarification
+- help → stay
+- clarification → stay or request_clarification
+- correction → reanchor
+- normal → stay or advance
+
+{
+  "intentType": "normal",
+  "targetSections": [],
+  "decisionHint": "stay",
+  "summary": "one short line"
+}

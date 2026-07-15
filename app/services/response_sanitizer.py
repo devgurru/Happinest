@@ -1,12 +1,10 @@
 """
 Sanitize AI structured output before validation.
-Fixes common model mistakes (invalid stage ids, bad decision types).
-Does NOT block normal stage advance — only overrides on explicit corrections.
+Fixes invalid stage ids and decision types only.
 """
 from __future__ import annotations
 
 from app.domain.enums import StageDecisionType, StageId
-from app.services.turn_intent import TurnIntent
 
 VALID_STAGE_IDS = {s.value for s in StageId}
 VALID_DECISION_TYPES = {d.value for d in StageDecisionType}
@@ -41,12 +39,7 @@ def _normalize_stage_id(raw_stage: str, current_stage: str) -> str:
     return current_stage
 
 
-def sanitize_ai_response(
-    raw: dict,
-    current_stage: str,
-    intent: TurnIntent | None = None,
-) -> dict:
-    """Fix invalid stage decisions so validation passes. Preserve advance when valid."""
+def sanitize_ai_response(raw: dict, current_stage: str) -> dict:
     raw = dict(raw)
 
     if "suggestions" not in raw or raw["suggestions"] is None:
@@ -59,22 +52,9 @@ def sanitize_ai_response(
         raw["memoryPatch"] = {}
 
     sd = raw.get("stageDecision") if isinstance(raw.get("stageDecision"), dict) else {}
-
     decision_type = sd.get("type", StageDecisionType.STAY.value)
     if decision_type not in VALID_DECISION_TYPES:
         decision_type = StageDecisionType.STAY.value
-
     to_stage = _normalize_stage_id(sd.get("stage", current_stage), current_stage)
-
-    # Explicit corrections only: reanchor on current stage (docs Example 3/5)
-    if (
-        intent
-        and intent.is_correction
-        and intent.confidence in ("medium", "high")
-        and intent.decision_type == StageDecisionType.REANCHOR.value
-    ):
-        decision_type = StageDecisionType.REANCHOR.value
-        to_stage = current_stage
-
     raw["stageDecision"] = {"type": decision_type, "stage": to_stage}
     return raw

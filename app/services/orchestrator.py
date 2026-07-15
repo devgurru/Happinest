@@ -3,19 +3,10 @@ Orchestrator — the core turn-processing pipeline.
 Backend controls all decisions. AI supports.
 
 Flow for conversation_turn:
-  1. Load session + latest memory
-  2. Load recent messages
-  3. Build prompt
-  4. Call AI
-  5. Validate AI response
-  6. Apply memory patch (only if valid)
-  7. Resolve stage decision via policy
-  8. Save planner message
-  9. Update session stage if advancing
-  10. Log turn
-  11. Return typed response
-
-No fallback responses. Explicit error on failure.
+  1. Load session + memory + history
+  2. Call 1 — intent (sections / gibberish / correction)
+  3. Call 2 — conversation turn with matching stage rules
+  4. Validate → apply memoryPatch → stage policy → reply
 """
 import copy
 import re
@@ -46,14 +37,13 @@ from app.services.prompt_builder import (
     build_brief_synthesis_prompt,
     build_conversation_turn_prompt,
     build_final_summary_prompt,
+    build_turn_intent_prompt,
 )
 from app.services.response_validator import validate_ai_response, validate_synthesis_response
 from app.services.session_service import SessionService
 from app.services.stage_policy import StagePolicy
 from app.services.patch_sanitizer import sanitize_memory_patch
 from app.services.planner_reply_policy import align_planner_reply
-from app.services.turn_interpreter import enrich_memory_patch, merge_patches
-from app.services.turn_intent import TurnIntent, classify_turn_intent
 from app.services.response_sanitizer import sanitize_ai_response
 from app.services.ui_hints import build_ui_suggestions
 from app.config import settings
@@ -613,9 +603,6 @@ async def process_conversation_turn(
     memory = mem_version.memory_json
     memory_before = copy.deepcopy(memory)
 
-    # Middle layer: classify intent before AI (corrections, target section, suggested patch)
-    turn_intent = classify_turn_intent(user_message, stage, memory)
-
     # Special: at s5_brief, "show me directions" triggers direction synthesis
     if stage == StageId.S5_BRIEF.value and _is_direction_request(user_message):
         await SessionService.append_message(
@@ -630,24 +617,48 @@ async def process_conversation_turn(
             stage, request_id, save_planner_message=True,
         )
 
-    # Client message saved after patch (below) so selectedChips snapshot is accurate
-
-    # 4. Load recent history for prompt (client message for this turn is not saved yet)
     all_messages = await SessionService.get_recent_messages(db, session_id, limit=21)
     history_for_prompt = [
         {"role": m.role, "content": m.content_text}
         for m in all_messages
     ]
 
-    # 5. Build prompt
+    # ── Call 1: intent classification ─────────────────────────────────────
+    turn_intent: dict = {
+        "intentType": "normal",
+        "targetSections": [],
+        "decisionHint": "stay",
+        "summary": "",
+    }
+    intent_telemetry: dict = {}
+    try:
+        intent_raw, intent_telemetry = await call_llm(
+            build_turn_intent_prompt(stage, memory, user_message),
+            stage,
+            EventType.CONVERSATION_TURN.value,
+        )
+        if isinstance(intent_raw, dict):
+            turn_intent = {
+                "intentType": str(intent_raw.get("intentType") or "normal"),
+                "targetSections": [
+                    s for s in (intent_raw.get("targetSections") or []) if isinstance(s, str)
+                ],
+                "decisionHint": str(intent_raw.get("decisionHint") or "stay"),
+                "summary": str(intent_raw.get("summary") or ""),
+            }
+    except AIGatewayError:
+        # Fall through with default normal intent — Call 2 still runs
+        pass
+
+    # ── Call 2: conversation turn with intent-aware stage rules ───────────
     messages = build_conversation_turn_prompt(
         stage=stage,
         memory=memory,
         recent_messages=history_for_prompt,
         user_message=user_message,
+        intent=turn_intent,
     )
 
-    # 6. Call AI
     telemetry: dict = {}
     ai_result: dict | None = None
     error_code: str | None = None
@@ -662,6 +673,7 @@ async def process_conversation_turn(
             "model": settings.active_chat_model,
             "provider": settings.llm_provider,
             "http_status": e.http_status,
+            **intent_telemetry,
         }
 
     if error_code or not ai_result:
@@ -681,10 +693,30 @@ async def process_conversation_turn(
             message=error_message or "Something went wrong. Please try again.",
         )
 
-    # 6b. Sanitize model output (fix invalid stage ids like s6_personality)
-    ai_result = sanitize_ai_response(ai_result, stage, turn_intent)
+    ai_result = sanitize_ai_response(ai_result, stage)
 
-    # 7. Validate AI response
+    # Honor intent when call-2 missed the empty-patch / decision shape
+    intent_type = turn_intent.get("intentType") or "normal"
+    if intent_type == "gibberish":
+        ai_result["memoryPatch"] = {}
+        ai_result["stageDecision"] = {
+            "type": StageDecisionType.REQUEST_CLARIFICATION.value,
+            "stage": stage,
+        }
+    elif intent_type == "help":
+        ai_result["memoryPatch"] = {}
+        ai_result["stageDecision"] = {
+            "type": StageDecisionType.STAY.value,
+            "stage": stage,
+        }
+    elif intent_type == "correction" and turn_intent.get("decisionHint") == "reanchor":
+        sd = ai_result.get("stageDecision") or {}
+        if sd.get("type") == StageDecisionType.ADVANCE.value:
+            ai_result["stageDecision"] = {
+                "type": StageDecisionType.REANCHOR.value,
+                "stage": stage,
+            }
+
     is_valid, val_error = validate_ai_response(ai_result, stage)
     if not is_valid:
         await log_ai_turn(
@@ -699,54 +731,14 @@ async def process_conversation_turn(
         )
         return _make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
 
-    # 8. Agent-owned memory: honor clarification = empty patch; apply agent patch lightly
-    ai_patch = dict(ai_result.get("memoryPatch") or {})
     sd_type = (ai_result.get("stageDecision") or {}).get("type", "")
-
-    # Agent decided input was unclear / gibberish → NEVER write to canonical memory
+    ai_patch = dict(ai_result.get("memoryPatch") or {})
     if sd_type == StageDecisionType.REQUEST_CLARIFICATION.value:
         ai_patch = {}
-    # Gibberish user text: even if model forgot empty patch, drop commits
-    from app.services.text_extract import looks_like_gibberish
-    if looks_like_gibberish(user_message):
-        ai_patch = {}
-        # Force clarification stay if model still tried to advance with mash input
-        if sd_type == StageDecisionType.ADVANCE.value:
-            ai_result["stageDecision"] = {
-                "type": StageDecisionType.REQUEST_CLARIFICATION.value,
-                "stage": stage,
-            }
-            sd_type = StageDecisionType.REQUEST_CLARIFICATION.value
 
-    if turn_intent.suggested_patch and sd_type != StageDecisionType.REQUEST_CLARIFICATION.value:
-        ai_patch = merge_patches(turn_intent.suggested_patch, ai_patch)
-
-    # Prefer agent's memoryPatch; enrich only fills structural gaps (place/month/chips)
-    # when agent already committed a non-empty patch for this stage — skip enrich on empty.
-    if ai_patch:
-        patch = enrich_memory_patch(stage, user_message, ai_patch, memory)
-        patch = sanitize_memory_patch(
-            patch, stage=stage, message=user_message, memory=memory
-        )
-    else:
-        # Empty agent patch: still allow deterministic S2 fill from clear place/month text
-        # (agent may forget structure) — never invent personality/vibe from garbage.
-        if (
-            stage == StageId.S2_BASICS.value
-            and not looks_like_gibberish(user_message)
-            and sd_type != StageDecisionType.REQUEST_CLARIFICATION.value
-        ):
-            patch = enrich_memory_patch(stage, user_message, {}, memory)
-            patch = sanitize_memory_patch(
-                patch, stage=stage, message=user_message, memory=memory
-            )
-            # Only keep occasion / earlySignals for S2 — drop anything else
-            patch = {
-                k: v for k, v in patch.items()
-                if k in ("occasion", "earlySignals")
-            }
-        else:
-            patch = {}
+    patch = sanitize_memory_patch(
+        ai_patch, stage=stage, message=user_message, memory=memory
+    ) if ai_patch else {}
 
     open_questions = ai_result.get("openQuestions", [])
     updated_version = mem_version.version_no
@@ -816,19 +808,15 @@ async def process_conversation_turn(
         final_decision_type, final_stage, _reason = resolve_correction_stage_decision(
             correction, stage
         )
-        # Merge stale from correction (memory already has them if we applied markers)
         stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
     else:
-        # Normal progression — StagePolicy may advance when memory is complete
         final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
             ai_decision_type, ai_to_stage, stage, memory,
             open_questions=open_questions,
         )
-        # Never let a low-confidence intent block advance
         if (
-            turn_intent.is_correction
-            and turn_intent.decision_type == StageDecisionType.REANCHOR.value
-            and turn_intent.confidence in ("medium", "high")
+            turn_intent.get("intentType") == "correction"
+            and turn_intent.get("decisionHint") == StageDecisionType.REANCHOR.value
         ):
             final_decision_type = StageDecisionType.REANCHOR.value
             final_stage = stage

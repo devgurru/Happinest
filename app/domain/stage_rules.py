@@ -25,6 +25,14 @@ You decide what enters canonical memory via memoryPatch. Follow these invariants
    - memoryPatch MUST be {} (empty object — NEVER copy garbage into tags or any field)
    - Warmly say you did not understand, then re-ask THIS stage's goal in fresh wording
      (vary every time — never a fixed script; never mention directions unless on s6).
+2b. HELP / HOW-TO QUESTIONS (not gibberish):
+   If they ask what a stage means, whether to pick chips or type their own, what
+   "personality"/"vibe"/events mean, or how to answer:
+   - intent is help — stageDecision.type = "stay"
+   - memoryPatch = {}
+   - Answer clearly and kindly; say chips are optional shortcuts AND custom text is welcome
+   - End with one concrete invite to answer THIS stage
+   - NEVER say they misunderstood or that there was a communication error
 3. If stageDecision.type is "request_clarification" OR "stay" because you did not
    understand → memoryPatch MUST be {}.
 4. Never put cities, months, years, full sentences, or vibe adjectives into
@@ -79,15 +87,20 @@ in personality.tags or vibe.primaryVibe on this stage. You may omit early
 signals from memoryPatch (backend may park them); you must still NOT write
 personality/vibe patches.
 
-ADVANCE when: place (or clear setting) AND (concrete FUTURE month OR named season).
-On ADVANCE to s3_personality, plannerReply must:
-- Acknowledge place + date specifically (e.g. "December 2026 in Delhi")
-- Ask about the COUPLE (personality, roots, interests, love story) — NOT venue setting,
-  NOT "what setting do you have in mind", NOT design directions
-- If earlySignals has vibe (e.g. Big & festive), you may mention you'll explore vibe soon
-Otherwise stay and ask only for the missing piece (if place known, ask month — never re-ask place).
+ADVANCE when: place (or clear setting) AND (concrete FUTURE month OR named season)
+are both present in memory after this patch.
 
-GIBBERISH on s2: request_clarification + {}. Vary wording from your last reply. Light humor OK once.
+CRITICAL for stay vs advance:
+- If message has city + future month (e.g. "Goa, December 2026") → patch BOTH place and
+  datePreference, stageDecision.type = "advance", ask personality (s3) next.
+- If message has city + PAST month/year (e.g. "Goa, March 2026" when today is later) →
+  patch place only, do NOT put the past date in datePreference, stay, warmly explain
+  that date seems to have passed, ask for a future month/year. Do NOT ask personality.
+- If only place → stay, ask for month/season only.
+- If only timing → stay, ask for place only.
+- NEVER ask about "what you both love / relationship unique" while still on s2_basics.
+
+GIBBERISH on s2: request_clarification + {}. Vary wording. Light humor OK once.
 """.strip(),
 
     StageId.S3_PERSONALITY.value: """
@@ -109,6 +122,10 @@ REJECT → memoryPatch MUST be {}:
 - Single meaningless word fragments
 
 If you cannot interpret the message: request_clarification + empty memoryPatch.
+
+HELP: If they ask what personality means or about chips vs free text — stay, empty patch,
+explain briefly (who you are as a couple; chips optional; own words welcome), then invite
+one answer. Do not treat that as misunderstanding.
 
 ADVANCE when: at least 2 meaningful personality tags (or 1 tag + clear
 relationship/lifestyle signal). Culture word alone is not enough.
@@ -221,3 +238,55 @@ def get_stage_rules(stage: str) -> str:
     """Full agent rule block for the current stage."""
     specific = STAGE_RULES.get(stage, "Patch only fields relevant to this stage. Reject gibberish.")
     return f"{GLOBAL_AGENT_RULES}\n\n{specific}"
+
+
+_SECTION_TO_STAGE: dict[str, str] = {
+    "identity": StageId.S1_NAMES.value,
+    "occasion": StageId.S2_BASICS.value,
+    "personality": StageId.S3_PERSONALITY.value,
+    "vibe": StageId.S4_VIBE.value,
+    "direction": StageId.S6_DIRECTIONS.value,
+    "logistics": StageId.S7_EVENTS.value,
+}
+
+
+def get_stage_rules_for_intent(
+    current_stage: str,
+    target_sections: list[str] | None = None,
+    *,
+    intent_type: str = "normal",
+    intent_summary: str = "",
+) -> str:
+    """
+    Current-stage rules plus any upstream section rules when the user
+    corrects earlier data from a later stage (e.g. S4 → occasion/S2).
+    """
+    stages = [current_stage]
+    for section in target_sections or []:
+        mapped = _SECTION_TO_STAGE.get(section)
+        if mapped and mapped not in stages:
+            stages.append(mapped)
+        # logistics may need guests/budget/vendor rules when on those stages
+        if section == "logistics" and current_stage in (
+            StageId.S8_GUESTS.value,
+            StageId.S9_BUDGET.value,
+            StageId.S10_VENDORS.value,
+        ):
+            if current_stage not in stages:
+                stages.append(current_stage)
+
+    blocks = [GLOBAL_AGENT_RULES]
+    if intent_summary or intent_type != "normal":
+        blocks.append(
+            f"## INTENT CONTEXT\n"
+            f"intentType: {intent_type}\n"
+            f"summary: {intent_summary or '(none)'}\n"
+            f"targetSections: {', '.join(target_sections or []) or '(current stage only)'}\n"
+            f"Honor this: gibberish → empty memoryPatch + request_clarification. "
+            f"help → empty memoryPatch + stay; explain chips/process, invite an answer — "
+            f"never say they misunderstood. "
+            f"If correction of earlier data → reanchor, patch those sections, ask current-stage question."
+        )
+    for sid in stages:
+        blocks.append(STAGE_RULES.get(sid, f"## STAGE RULES — {sid}\nPatch only valid fields for this stage."))
+    return "\n\n".join(blocks)
