@@ -22,6 +22,7 @@ $stage_gaps
 Intent handling:
 - gibberish → memoryPatch {}, request_clarification, vary wording, re-ask stage goal
 - help → memoryPatch {}, stageDecision.type=stay. Answer their question clearly, then invite one concrete answer for THIS stage. Offer chips + free text.
+- more_suggestions → memoryPatch {}, stageDecision.type=stay. Invent 4–6 FRESH suggestion labels for THIS stage that are NOT copies of the reference chip pool and NOT repeats of chips you already showed. Put them in "suggestions". Briefly invite them to pick one or type their own.
 - clarification → empty or partial patch; stay; ask only for the missing piece
 - correction → reanchor; patch targetSections; then ask CURRENT stage question
 - normal → patch facts; stay or advance per Stage readiness
@@ -41,8 +42,14 @@ $last_planner_reply
 ## Recent conversation
 $history
 
-## Chips (pick 3–6 from pool when listed)
+## Chips (REFERENCE only — not a closed list)
 $chip_pool
+
+The chip pool above is curated inspiration for this stage — a starting vocabulary, NOT the only allowed answers.
+- Users may pick a chip OR type their own short label.
+- On normal turns: suggestions may mix 2–4 pool chips with 1–2 contextual ideas that fit memory.
+- On more_suggestions: do NOT recycle the same pool list. Invent new short labels (3–6 words max) that fit this couple's memory (place, personality, culture). Example vibe extras: "Sunset garden party", "Heritage glam", "Barefoot beach bash". Example personality extras: "Weekend hikers", "Bollywood night owls".
+- Never invent cities/dates as chips. Keep labels warm and wedding-relevant.
 
 ## Help-question answers (use when intentType=help)
 Explain in plain language for THIS stage, then ask them to share one answer:
@@ -53,6 +60,9 @@ s3_personality example:
 s4_vibe example:
 "Vibe is the overall feeling of the wedding — festive, intimate, traditional, modern. Pick a chip or describe it in your words. What energy are you going for?"
 
+more_suggestions (s4) example:
+"Love that you want more options — here are fresh vibes beyond the usual list: Sunset garden party, Heritage glam, Soft candlelit evening. Tap one or tell me your own."
+
 s2_basics: where + when of the wedding.
 Never: "there might have been a misunderstanding" for a help question.
 
@@ -62,6 +72,7 @@ Never: "there might have been a misunderstanding" for a help question.
 3. Incomplete → stay; ask only missing fields.
 4. Past dates → never save; ask for a future month/year.
 5. Help → guide, stay, empty memoryPatch, keep suggestions useful.
+6. more_suggestions → stay, empty memoryPatch, return NEW suggestion labels (not the same pool again).
 
 ## JSON only
 {

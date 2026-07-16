@@ -42,7 +42,6 @@ from app.services.prompt_builder import (
 from app.services.response_validator import validate_ai_response, validate_synthesis_response
 from app.services.session_service import SessionService
 from app.services.stage_policy import StagePolicy
-from app.services.patch_sanitizer import sanitize_memory_patch
 from app.services.planner_reply_policy import align_planner_reply
 from app.services.response_sanitizer import sanitize_ai_response
 from app.services.ui_hints import build_ui_suggestions
@@ -709,6 +708,12 @@ async def process_conversation_turn(
             "type": StageDecisionType.STAY.value,
             "stage": stage,
         }
+    elif intent_type == "more_suggestions":
+        ai_result["memoryPatch"] = {}
+        ai_result["stageDecision"] = {
+            "type": StageDecisionType.STAY.value,
+            "stage": stage,
+        }
     elif intent_type == "correction" and turn_intent.get("decisionHint") == "reanchor":
         sd = ai_result.get("stageDecision") or {}
         if sd.get("type") == StageDecisionType.ADVANCE.value:
@@ -732,13 +737,10 @@ async def process_conversation_turn(
         return _make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
 
     sd_type = (ai_result.get("stageDecision") or {}).get("type", "")
-    ai_patch = dict(ai_result.get("memoryPatch") or {})
+    # Memory patch already sanitized in sanitize_ai_response()
+    patch = ai_result.get("memoryPatch", {})
     if sd_type == StageDecisionType.REQUEST_CLARIFICATION.value:
-        ai_patch = {}
-
-    patch = sanitize_memory_patch(
-        ai_patch, stage=stage, message=user_message, memory=memory
-    ) if ai_patch else {}
+        patch = {}
 
     open_questions = ai_result.get("openQuestions", [])
     updated_version = mem_version.version_no
@@ -940,6 +942,7 @@ async def process_conversation_turn(
         memory,
         ai_result.get("suggestions", []),
         for_stage=suggestion_stage,
+        prefer_custom=(turn_intent.get("intentType") == "more_suggestions"),
     )
     suggestions = [
         s for s in suggestions

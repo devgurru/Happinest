@@ -140,10 +140,12 @@ def build_ui_suggestions(
     ai_suggestions: list | None = None,
     *,
     for_stage: str | None = None,
+    prefer_custom: bool = False,
 ) -> list[dict]:
     """
     Return normalized suggestion objects for the frontend chip UI.
     `for_stage` lets us attach chips for the stage we are advancing into.
+    `prefer_custom` (more_suggestions): keep AI-invented labels; do not refill only from pool.
     """
     display_stage = for_stage or stage
 
@@ -161,17 +163,29 @@ def build_ui_suggestions(
 
     pool_set = {c.lower(): c for c in pool}
     selected: list[str] = []
+    allow_custom = prefer_custom or display_stage in (
+        StageId.S3_PERSONALITY.value,
+        StageId.S4_VIBE.value,
+    )
 
     for label in _labels_from_ai(ai_suggestions):
         canonical = pool_set.get(label.lower())
-        if canonical and canonical not in selected:
-            selected.append(canonical)
-
-    for chip in _contextual_chip_order(display_stage, memory, pool):
-        if chip not in selected:
-            selected.append(chip)
-        if len(selected) >= 6:
+        if canonical:
+            if canonical not in selected:
+                selected.append(canonical)
+        elif allow_custom and 2 <= len(label) <= 40 and label not in selected:
+            # Chip pool is reference — keep agent-invented short labels
+            if label.lower() not in {s.lower() for s in selected}:
+                selected.append(label)
+        if prefer_custom and len(selected) >= 6:
             break
+
+    if not prefer_custom or len(selected) < 3:
+        for chip in _contextual_chip_order(display_stage, memory, pool):
+            if chip.lower() not in {s.lower() for s in selected}:
+                selected.append(chip)
+            if len(selected) >= 6:
+                break
 
     category = {
         StageId.S3_PERSONALITY.value: "personality",

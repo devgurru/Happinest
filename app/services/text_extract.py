@@ -369,133 +369,42 @@ def is_valid_primary_vibe(value: str) -> bool:
 
     if not value or not isinstance(value, str):
         return False
-    low = value.strip().lower()
-    if low in KNOWN_CITIES or any(m in low for m in MONTHS):
+    text = value.strip()
+    low = text.lower()
+    if len(text) < 2 or len(text) > 40:
+        return False
+    if low in KNOWN_CITIES or any(m in low.split() for m in MONTHS):
+        return False
+    if re.search(r"\b(19|20)\d{2}\b", low):
         return False
     pool = {v.lower() for v in get_chip_pool(StageId.S4_VIBE.value)}
     if low in pool:
         return True
-    # Allow mapped alias resolution
     mapped = extract_vibe_label(value)
-    return bool(mapped and mapped.lower() in pool)
+    if mapped and mapped.lower() in pool:
+        return True
+    # Custom short vibe labels (chips are reference, not a closed set)
+    if looks_like_gibberish(text):
+        return False
+    words = text.split()
+    return 1 <= len(words) <= 5
 
 
 def normalize_primary_vibe(value: str | None, message: str = "") -> str | None:
-    """Return a pool vibe label or None."""
+    """Return a pool vibe label, a valid custom vibe, or None."""
     if value and is_valid_primary_vibe(value):
         from app.domain.chip_pools import get_chip_pool
         from app.domain.enums import StageId
         pool_map = {v.lower(): v for v in get_chip_pool(StageId.S4_VIBE.value)}
         return pool_map.get(value.strip().lower()) or value.strip()
-    # Try message / value as free text
     for source in (message, value or ""):
         mapped = extract_vibe_label(source)
         if mapped:
             return mapped
+        if source and is_valid_primary_vibe(source):
+            return source.strip()
     return None
 
 
-def looks_like_occasion_rehash(message: str, memory: dict) -> bool:
-    """
-    True when the user restates place/date (optional vibe adjectives) without
-    real personality chips — common when they paste the S2 sentence again on S3/S4.
-    """
-    msg = message.strip()
-    if not msg:
-        return False
-    msg_l = msg.lower()
-    occ = memory.get("occasion") or {}
-    place = (occ.get("place") or "").strip().lower()
-    date = (occ.get("datePreference") or "").strip().lower()
-
-    has_city = bool(extract_place_from_message(message)) or (place and place in msg_l)
-    has_month = bool(extract_month_or_season(message).get("datePreference")) or (
-        date and any(m in msg_l for m in MONTHS)
-    )
-
-    # Personality pool hits would mean it's NOT just a rehash
-    from app.domain.chip_pools import get_chip_pool
-    from app.domain.enums import StageId
-    from app.services.ui_hints import chips_mentioned_in_message
-
-    personality_hits = chips_mentioned_in_message(message, get_chip_pool(StageId.S3_PERSONALITY.value))
-    # Filter out false hits if any
-    personality_hits = [p for p in personality_hits if not is_junk_tag(p)]
-
-    if personality_hits:
-        return False
-
-    # Place + month heavy message with few other intent words for "who we are"
-    if has_city and has_month:
-        # If message length is short / dominated by occasion words → rehash
-        # Strip place, month, year, vibe adjectives — if little remains, it's a rehash
-        residual = msg_l
-        for city in KNOWN_CITIES:
-            residual = re.sub(rf"\b{city}\b", " ", residual)
-        for m in MONTHS:
-            residual = re.sub(rf"\b{m}\b", " ", residual)
-        residual = re.sub(r"\b(19|20)\d{2}\b", " ", residual)
-        residual = re.sub(
-            r"\b(big|festive|north|south|indian|wedding|traditional|modern|&|—|-|,|\.)\b",
-            " ",
-            residual,
-        )
-        residual = re.sub(r"\s+", " ", residual).strip()
-        if len(residual) <= 8:
-            return True
-        # Even with a few leftovers, city+month restating known occasion is a rehash
-        if place and place in msg_l and date and any(part in msg_l for part in date.split() if len(part) > 2):
-            return True
-
-    return False
-
-
-def extract_early_signals(message: str) -> dict:
-    """
-    Capture personality/vibe hints mentioned outside their stages
-    without advancing those stages.
-    """
-    from app.domain.chip_pools import get_chip_pool
-    from app.domain.enums import StageId
-    from app.services.ui_hints import chips_mentioned_in_message
-
-    msg_l = message.lower()
-    signals: dict = {"personality": [], "vibe": [], "occasionHints": {}, "culturalSignals": []}
-
-    if "beach" in msg_l:
-        signals["occasionHints"]["settingPreference"] = "beach"
-        signals["personality"].append("Beach lovers")
-
-    personality_pool = get_chip_pool(StageId.S3_PERSONALITY.value)
-    vibe_pool = get_chip_pool(StageId.S4_VIBE.value)
-    signals["personality"].extend(chips_mentioned_in_message(message, personality_pool))
-    signals["vibe"].extend(chips_mentioned_in_message(message, vibe_pool))
-
-    vibe = extract_vibe_label(message)
-    if vibe:
-        signals["vibe"].append(vibe)
-
-    if "food" in msg_l or "foodie" in msg_l:
-        signals["personality"].append("Foodies")
-    if "music" in msg_l:
-        signals["personality"].append("Music-obsessed")
-
-    # Cultural note — park as early cultural, not locationPreference
-    if "north indian" in msg_l:
-        signals["culturalSignals"].append("North Indian")
-    if "south indian" in msg_l:
-        signals["culturalSignals"].append("South Indian")
-    if "punjabi" in msg_l:
-        signals["culturalSignals"].append("Punjabi family")
-
-    signals["personality"] = filter_tags(signals["personality"])
-    signals["vibe"] = [v for v in signals["vibe"] if is_valid_primary_vibe(v)]
-    # Dedupe vibes
-    seen_v: set[str] = set()
-    deduped_v = []
-    for v in signals["vibe"]:
-        if v.lower() not in seen_v:
-            seen_v.add(v.lower())
-            deduped_v.append(v)
-    signals["vibe"] = deduped_v
-    return signals
+# Note: looks_like_occasion_rehash() and extract_early_signals() removed
+# They were unused - AI handles these patterns via intent classification

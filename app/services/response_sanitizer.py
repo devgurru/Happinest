@@ -1,10 +1,11 @@
 """
 Sanitize AI structured output before validation.
-Fixes invalid stage ids and decision types only.
+Fixes invalid stage ids, decision types, and memory patch schema.
 """
 from __future__ import annotations
 
 from app.domain.enums import StageDecisionType, StageId
+from app.services.text_extract import sanitize_timing_fields
 
 VALID_STAGE_IDS = {s.value for s in StageId}
 VALID_DECISION_TYPES = {d.value for d in StageDecisionType}
@@ -57,4 +58,44 @@ def sanitize_ai_response(raw: dict, current_stage: str) -> dict:
         decision_type = StageDecisionType.STAY.value
     to_stage = _normalize_stage_id(sd.get("stage", current_stage), current_stage)
     raw["stageDecision"] = {"type": decision_type, "stage": to_stage}
+
+    # Sanitize memory patch schema (moved from patch_sanitizer.py)
+    raw["memoryPatch"] = _sanitize_memory_patch_schema(raw.get("memoryPatch", {}))
+
     return raw
+
+
+def _sanitize_memory_patch_schema(patch: dict) -> dict:
+    """
+    Fix AI's memory patch schema issues:
+    - Hoist mis-filed top-level occasion keys into occasion.{}
+    - Nest logistics fields properly into logistics.{}
+    - Sanitize timing fields (remove past dates, vague timing)
+    """
+    if not patch:
+        return patch
+
+    patch = dict(patch)
+
+    # Hoist mis-filed top-level occasion keys
+    occasion = dict(patch.get("occasion") or {})
+    for key in (
+        "place", "locationPreference", "settingPreference",
+        "datePreference", "seasonPreference", "destinationMode", "isConfirmed",
+    ):
+        if key in patch and key != "occasion":
+            val = patch.pop(key)
+            if val is not None and val != "":
+                occasion[key] = val
+    if occasion:
+        patch["occasion"] = sanitize_timing_fields(occasion)
+
+    # Nest logistics fields
+    logistics = dict(patch.get("logistics") or {})
+    for key in ("events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"):
+        if key in patch:
+            logistics[key] = patch.pop(key)
+    if logistics:
+        patch["logistics"] = logistics
+
+    return patch

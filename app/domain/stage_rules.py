@@ -33,13 +33,23 @@ You decide what enters canonical memory via memoryPatch. Follow these invariants
    - Answer clearly and kindly; say chips are optional shortcuts AND custom text is welcome
    - End with one concrete invite to answer THIS stage
    - NEVER say they misunderstood or that there was a communication error
+2c. MORE SUGGESTIONS REQUESTS:
+   If they ask for more / other / different / alternative chips or ideas:
+   - intent is more_suggestions — stageDecision.type = "stay"
+   - memoryPatch = {}
+   - Chip pools are REFERENCE only — invent 4–6 fresh short labels for THIS stage
+   - Do NOT only reshuffle the same backend pool list
+   - Fit ideas to memory (place, personality, culture) when possible
+   - Invite them to pick one or type their own
 3. If stageDecision.type is "request_clarification" OR "stay" because you did not
    understand → memoryPatch MUST be {}.
 4. Never put cities, months, years, full sentences, or vibe adjectives into
    personality.tags.
 5. Never put cities, months, or personality tags into vibe.primaryVibe.
-6. Prefer chip-pool labels when a pool is provided; custom tags only when they
-   clearly describe the couple (e.g. "Foodies", "College sweethearts").
+6. Prefer chip-pool labels when a pool is provided; custom tags are welcome when they
+   clearly describe the couple (e.g. "Foodies", "College sweethearts", "Sunset garden party").
+   Chip pools are inspiration — never refuse a clear custom short answer.
+   When they ask for more suggestions, invent new labels beyond the pool.
 7. Propose advance only when THIS stage's advance condition is clearly met
    from committed meaning in the message and/or already-known memory.
 8. When earlySignals has vibe/personality for a later stage, acknowledge it
@@ -136,8 +146,10 @@ relationship/lifestyle signal). Culture word alone is not enough.
 GOAL: Confirm emotional direction / primary vibe.
 
 ACCEPT → memoryPatch.vibe:
-- primaryVibe: MUST be a vibe chip-pool label
+- primaryVibe: prefer a vibe chip-pool label
   (e.g. "Big & festive", "Intimate", "Traditional & rooted")
+  OR a short custom vibe the user clearly commits to
+  (e.g. "Sunset garden party", "Heritage glam")
 - secondaryVibes, energyLevel, formality, familyRole when clear
 
 REJECT → empty memoryPatch:
@@ -150,7 +162,11 @@ REJECT → empty memoryPatch:
 MEMORY LOOKUP: If earlySignals.vibe or vibe.primaryVibe already set, acknowledge
 it in plannerReply instead of a blank "what's the vibe?"
 
-ADVANCE when: primaryVibe is a valid pool label AND personality was already
+MORE SUGGESTIONS: If they ask for more vibe options beyond the chips shown,
+stay with empty memoryPatch and return fresh vibe labels in "suggestions"
+(not the same pool reshuffled). Fit to their place/personality when you can.
+
+ADVANCE when: primaryVibe is set (pool or clear custom) AND personality was already
 filled in earlier turns (do not invent missing personality).
 """.strip(),
 
@@ -285,6 +301,8 @@ def get_stage_rules_for_intent(
             f"Honor this: gibberish → empty memoryPatch + request_clarification. "
             f"help → empty memoryPatch + stay; explain chips/process, invite an answer — "
             f"never say they misunderstood. "
+            f"more_suggestions → empty memoryPatch + stay; invent fresh suggestion labels "
+            f"beyond the reference chip pool. "
             f"If correction of earlier data → reanchor, patch those sections, ask current-stage question."
         )
     for sid in stages:
