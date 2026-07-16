@@ -6,7 +6,6 @@ import string
 from pathlib import Path
 
 from app.domain.chip_pools import format_chip_pool_for_prompt
-from app.domain.stage_rules import get_stage_rules_for_intent
 from app.services.stage_policy import StagePolicy
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -102,7 +101,7 @@ def build_conversation_turn_prompt(
     target_sections = [
         s for s in (intent.get("targetSections") or []) if isinstance(s, str)
     ]
-    stage_rules = get_stage_rules_for_intent(
+    stage_rules = StagePolicy.get_stage_rules_for_intent(
         stage,
         target_sections,
         intent_type=str(intent.get("intentType") or "normal"),

@@ -4,7 +4,7 @@ These are the source of truth for all stage, event, and decision vocabulary.
 Backend enforces these. No other code should hardcode stage/event strings.
 """
 from enum import Enum
-
+from app.config import settings
 
 # ─── Stage IDs ────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ class StageDecisionType(str, Enum):
 # ─── Response Sources ─────────────────────────────────────────────────────────
 
 class ResponseSource(str, Enum):
-    OPENAI = "openai"   # Successful AI response (Gemma3 locally = same semantics)
+    OPENAI = settings.llm_provider   # Successful AI response (Gemma3 locally = same semantics)
     SYSTEM = "system"   # Backend/rule-based response (e.g. S1 names)
     RULE   = "rule"     # Deterministic backend rule applied
     ERROR  = "error"    # Explicit failure — no fallback generated
