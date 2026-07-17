@@ -1,9 +1,26 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str) -> str:
+    """Railway/Heroku give postgresql:// — this app uses async SQLAlchemy + asyncpg."""
+    if not url or url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://") :]
+    return url
 
 
 class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://root:root@localhost:5432/wedding_ai_db"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, v: str) -> str:
+        return normalize_database_url(v)
 
     # ─── LLM provider switch ──────────────────────────────────────────────────
     # "ollama" = local Gemma via Ollama
