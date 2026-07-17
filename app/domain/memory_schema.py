@@ -67,6 +67,9 @@ DEFAULT_PLANNER_MEMORY: dict = {
     "earlySignals": {
         "personality": [],
         "vibe": [],
+        "events": [],
+        "budget": {},
+        "vendors": {},
         "acknowledged": False,
     },
     "committedSelections": {

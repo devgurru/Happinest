@@ -62,6 +62,66 @@ def _history_and_last_reply(recent_messages: list[dict], *, limit: int) -> tuple
     return ("\n".join(lines) if lines else "(first message)", last_planner)
 
 
+def _early_signals_reminder(stage: str, memory: dict) -> str:
+    """
+    Build a direct reminder injected just before the user message.
+    LLMs attend to end-of-context far more reliably than system prompt instructions.
+    Only fires when early signals exist and the canonical field is still empty.
+    """
+    early = memory.get("earlySignals") or {}
+
+    if stage == "s3_personality":
+        tags = (memory.get("personality") or {}).get("tags") or []
+        ep = early.get("personality") or []
+        if ep and not tags:
+            return (
+                f"[REMINDER: earlySignals.personality = {ep} — "
+                f"canonical personality.tags is EMPTY. "
+                f"Your plannerReply MUST say: \"You mentioned you're {', '.join(ep)} earlier — "
+                f"does that capture you two, or want to add more?\" "
+                f"memoryPatch = {{}} (empty). stageDecision = stay.]"
+            )
+
+    if stage == "s4_vibe":
+        from app.domain.memory_schema import resolve_primary_vibe
+        ev = early.get("vibe") or []
+        if ev and not resolve_primary_vibe(memory):
+            return (
+                f"[REMINDER: earlySignals.vibe = {ev} — "
+                f"canonical vibe.primaryVibe is EMPTY. "
+                f"Your plannerReply MUST say: \"You mentioned {', '.join(ev[:2])} earlier — "
+                f"keep that or want something else?\" "
+                f"memoryPatch = {{}} (empty). stageDecision = stay.]"
+            )
+
+    if stage == "s7_events":
+        events = (memory.get("logistics") or {}).get("events") or []
+        ee = early.get("events") or []
+        if ee and not events:
+            return (
+                f"[REMINDER: earlySignals.events = {ee} — "
+                f"canonical logistics.events is EMPTY. "
+                f"Your plannerReply MUST say: \"You mentioned {', '.join(ee)} earlier — "
+                f"are those the events you want, or want to change anything?\" "
+                f"memoryPatch = {{}} (empty). stageDecision = stay.]"
+            )
+
+    if stage == "s9_budget":
+        budget = (memory.get("logistics") or {}).get("budget") or {}
+        eb = early.get("budget") or {}
+        if eb and not budget.get("range"):
+            rng = eb.get("range") or str(eb)
+            return (
+                f"[REMINDER: earlySignals.budget = {eb} — "
+                f"canonical logistics.budget is EMPTY. "
+                f"Your plannerReply MUST say: \"You mentioned a budget of {rng} earlier — "
+                f"does that still work, or want to adjust?\" "
+                f"memoryPatch = {{}} (empty). stageDecision = stay.]"
+            )
+
+    return ""
+
+
 def build_turn_intent_prompt(
     stage: str,
     memory: dict,
@@ -126,12 +186,13 @@ def build_conversation_turn_prompt(
         history=history,
     )
 
-    json_reminder = (
-        "[Respond ONLY with one valid JSON object. No markdown.]\n\n"
-    )
+    json_reminder = "[Respond ONLY with one valid JSON object. No markdown.]\n\n"
+    early_reminder = _early_signals_reminder(stage, memory)
+    user_content = f"{early_reminder}\n\n{json_reminder}{user_message}".strip() if early_reminder else f"{json_reminder}{user_message}"
+
     return [
         {"role": "system", "content": system_content},
-        {"role": "user", "content": json_reminder + user_message},
+        {"role": "user", "content": user_content},
         {"role": "assistant", "content": "{"},
     ]
 

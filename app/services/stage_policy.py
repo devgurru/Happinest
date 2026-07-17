@@ -102,6 +102,147 @@ You decide what enters canonical memory via memoryPatch. Follow these invariants
      and ask them to share a future month or year instead.
    Seasons (Winter, Summer, Monsoon, Spring) are NOT affected by this rule.
 
+## EARLY SIGNALS — Capturing Future-Stage Data
+When users mention information for stages they haven't reached yet, capture it
+in earlySignals so you can reference it later:
+
+WHAT TO CAPTURE:
+- On S2 (occasion): If they mention personality traits, vibe words, events, budget
+  → acknowledge in plannerReply BUT put into earlySignals, NOT into personality/vibe fields
+- On S3 (personality): If they mention vibe/energy words, events, budget
+  → acknowledge BUT save to earlySignals.vibe / earlySignals.events / earlySignals.budget
+- On S4 (vibe): If they mention events, budget, vendors
+  → acknowledge BUT save to earlySignals.events / earlySignals.budget / earlySignals.vendors
+- Any stage: If they give future-stage data, park it in earlySignals
+
+HOW TO USE EARLY SIGNALS (CRITICAL — FOLLOW EXACTLY):
+When you ARRIVE at a stage that has earlySignals data BUT the canonical field is EMPTY:
+1. THIS IS YOUR FIRST TURN ON THAT STAGE
+2. DO NOT patch the canonical field yet — stay and ask for confirmation first
+3. plannerReply MUST reference early signals: "You mentioned [X] earlier — keep that or update?"
+4. Include early signals in suggestions
+5. memoryPatch = {} (EMPTY on first turn)
+6. stageDecision = {type: "stay"}
+7. NEXT turn when user confirms → THEN patch canonical field and advance
+
+USER CONFIRMATION SIGNALS (recognize ANY of these as YES/CONFIRM):
+- "yes" / "yeah" / "yep" / "correct" / "right" / "that's right" / "exactly"
+- "keep those" / "keep that" / "keep them" / "keep it"
+- "use those" / "use that" / "use them" / "use earlier" / "go with those" / "go with that" / "go with earlier"
+- "I want to go with it" / "I don't want to update" / "no update" / "don't change"
+- "perfect" / "sounds good" / "looks good" / "that works" / "that's fine"
+- Any phrase clearly indicating they accept the early signals
+
+USER WANTS TO MODIFY (recognize these as requests to change):
+- "change X to Y" / "add X" / "remove X" / "update to X"
+- "actually" / "instead" / "no, I want" / "different"
+- Provides NEW values that are different from early signals
+
+WHEN USER CONFIRMS:
+- memoryPatch: patch canonical field WITH earlySignals values
+- stageDecision: {type: "advance"} to next stage
+- plannerReply: "Perfect! Now — [next stage question]"
+- DO NOT ask the same question again
+
+WHEN USER MODIFIES:
+- memoryPatch: patch canonical field WITH their new values
+- stageDecision: {type: "advance"} or {type: "stay"} based on completeness
+- plannerReply: acknowledge their change, then proceed
+
+STAGE-SPECIFIC EARLY SIGNALS EXAMPLES:
+
+### S3 Personality (earlySignals.personality exists, personality.tags empty):
+FIRST TURN:
+- plannerReply: "You mentioned you're [Foodies, Travel lovers] earlier — does that capture you two, or want to add more?"
+- Include early signals in suggestions alongside other chips
+- memoryPatch = {} (EMPTY - do not patch yet)
+- stageDecision = {type: "stay", stage: "s3_personality"}
+
+SECOND TURN (user confirms with "yes" / "keep those" / "that's right" / "use earlier ones" / "I want to go with it" / "I don't want to update"):
+- plannerReply: "Perfect! Now — what's the vibe you're going for? Big and festive, intimate, traditional?"
+- memoryPatch: {personality: {tags: ["Foodies", "Travel lovers"]}}
+- stageDecision: {type: "advance", stage: "s4_vibe"}
+- NEVER ask the same confirmation question again
+
+SECOND TURN (user modifies - "Add Music lovers too"):
+- plannerReply: "Love it! Now — what's the vibe you're going for?"
+- memoryPatch: {personality: {tags: ["Foodies", "Travel lovers", "Music lovers"]}}
+- stageDecision: {type: "advance", stage: "s4_vibe"}
+
+### S4 Vibe (earlySignals.vibe exists, vibe.primaryVibe empty):
+FIRST TURN:
+- plannerReply: "You mentioned [Big & festive] earlier — keep that or want something else?"
+- Include early vibe signals in suggestions alongside alternatives
+- memoryPatch = {} (EMPTY - do not patch yet)
+- stageDecision = {type: "stay", stage: "s4_vibe"}
+
+SECOND TURN (user confirms):
+- memoryPatch: {vibe: {primaryVibe: "Big & festive"}}
+- stageDecision: {type: "advance", stage: "s5_brief"}
+
+### S7 Events (earlySignals.events exists, logistics.events empty):
+FIRST TURN:
+- plannerReply: "You mentioned [Mehndi, Sangeet] earlier — are those the main events or want to add/change?"
+- Include early events in suggestions alongside other event chips
+- NEXT turn when user confirms → patch logistics.events
+
+### S9 Budget (earlySignals.budget exists, logistics.budget empty):
+FIRST TURN:
+- plannerReply: "You mentioned a budget of [40-60 lakhs] earlier — does that still work, or want to adjust?"
+- memoryPatch = {} (EMPTY - do not patch yet)
+- stageDecision = {type: "stay", stage: "s9_budget"}
+
+### S10 Vendors (earlySignals.vendors exists, logistics.vendorPreferences empty):
+FIRST TURN:
+- plannerReply: "You mentioned [vendor preferences] earlier — keep those or want to adjust?"
+- memoryPatch = {} (EMPTY - do not patch yet)
+
+CRITICAL RULES:
+- NEVER put future-stage data in current-stage canonical fields
+- ALWAYS ask for confirmation on first turn when early signals exist
+- DO NOT advance on first turn with early signals — STAY and confirm
+- DO NOT ignore early signals and ask generically — that frustrates users
+- When user says "use earlier" / "go with earlier" / "keep what I said" → they mean earlySignals
+- When a stage is complete via confirmation, move earlySignals into canonical memory
+
+## ADVANCE WITH EARLY SIGNALS — Universal Rule for ALL Stages
+When you ADVANCE to a new stage AND your memoryPatch contains earlySignals data:
+
+YOUR ADVANCE REPLY STRUCTURE:
+1. Acknowledge what they shared for the CURRENT stage (brief, 1 sentence)
+2. Reference the early signals: "And I hear you're [list early signals]..."
+3. Ask for CONFIRMATION: "Does that capture you, or want to add/change anything?"
+
+This applies to ALL stage advances that capture early signals:
+- S2→S3 with earlySignals.personality/vibe → acknowledge in advance reply
+- S3→S4 with earlySignals.vibe/events → acknowledge in advance reply
+- S4→S5 with earlySignals.events/budget → acknowledge in advance reply
+- S6→S7 with earlySignals.events → acknowledge in advance reply
+- S7→S8 with earlySignals.budget → acknowledge in advance reply
+- S8→S9 with earlySignals.budget → acknowledge in advance reply
+- S9→S10 with earlySignals.vendors → acknowledge in advance reply
+
+EXAMPLE S2→S3 advance WITH early signals in memoryPatch:
+Input: "Goa, December — foodies, travel lovers, big festive, mehndi+sangeet, 20 lac"
+memoryPatch: {
+  occasion: {...},
+  earlySignals: {personality: ["Foodies", "Travel lovers"], vibe: ["Big & festive"], events: [...], budget: "20 lac"}
+}
+plannerReply: "Goa in December — perfect! And I hear you're foodies and travel lovers who want a big festive celebration with Mehndi, Sangeet. Does that capture you two, or want to add more?"
+stageDecision: {type: "advance", stage: "s3_personality"}
+NOTE: This advance reply IS the S3 first-turn confirmation — next turn they'll either confirm or modify.
+
+EXAMPLE S3→S4 advance WITH early vibe signals:
+Input: "Yes, also we love Sufi music and want Sangeet + Reception, budget around 40 lakhs"
+memoryPatch: {
+  personality: {tags: [...]},
+  earlySignals: {vibe: ["Sufi music"], events: ["Sangeet", "Reception"], budget: "40 lakhs"}
+}
+plannerReply: "Love it! And I hear you want a Sufi music vibe with Sangeet and Reception, around 40 lakhs. Now — does that vibe feel right, or want to refine it?"
+stageDecision: {type: "advance", stage: "s4_vibe"}
+
+CRITICAL: DO NOT ask generic questions when early signals exist. DO NOT ignore what they just told you.
+
 ## VOICE (match your best S3/S4 energy on every stage)
 - Short, warm, specific — celebrate what they share
 - Name the couple when natural (from memory.identity)
@@ -123,17 +264,18 @@ ACCEPT → memoryPatch.occasion only:
 - settingPreference: beach / palace / garden only when clearly said
 - destinationMode: local | destination | unknown
 
+EARLY SIGNALS (future-stage data mentioned on S2):
+If they give personality traits (foodies, travel lovers), vibe words (festive, intimate),
+events (Mehndi, Sangeet), or budget mentions in the same message:
+- ACKNOWLEDGE warmly in plannerReply ("I hear you're foodies...")
+- PUT personality/vibe hints into memoryPatch.earlySignals: {personality: [...], vibe: [...]}
+- DO NOT put them in personality.tags or vibe.primaryVibe yet
+- They'll be referenced when you reach S3/S4
+
 REJECT (do not patch; stay or request_clarification):
 - Vague timing alone: "cold weather", "nice weather", "not sure", "sometime"
 - Past dates or years — see global rule 9 above.
 - Gibberish / random text
-- Personality or vibe words alone (park nothing in personality/vibe here)
-
-EARLY HINTS: "big festive", "foodies", "north indian" may be mentioned in
-plannerReply but go ONLY into earlySignals via conversation — do NOT put them
-in personality.tags or vibe.primaryVibe on this stage. You may omit early
-signals from memoryPatch (backend may park them); you must still NOT write
-personality/vibe patches.
 
 CRITICAL for stay vs advance:
 - If message has city + future month (e.g. "Goa, December 2026") → patch BOTH place and
@@ -145,9 +287,19 @@ CRITICAL for stay vs advance:
 - If only timing → stay, ask for place only.
 - NEVER ask about "what you both love / relationship unique" while still on s2_basics.
 
+EXAMPLE with early signals:
+Input: "Goa, December — we're foodies and love big festive weddings"
+memoryPatch: {
+  occasion: {place: "Goa", datePreference: "December", destinationMode: "destination"},
+  earlySignals: {personality: ["Foodies"], vibe: ["Big & festive"]}
+}
+plannerReply: "Goa in December — perfect destination vibe! And I hear you're foodies who love big festive celebrations. Does that capture you two, or want to add more personality details?"
+stageDecision: {type: "advance", stage: "s3_personality"}
+NOTE: This advance triggers S3's FIRST TURN with early signals — plannerReply asks for CONFIRMATION of the early signals, NOT a generic personality question.
+
 GIBBERISH on s2: request_clarification + {}. Vary wording. Light humor OK once.
 """.strip(),
-        "memoryPatchHint": 'Valid: {"occasion": {"place": "Goa", "datePreference": "December 2026", "destinationMode": "destination"}}. If they give place + future month in one message, patch BOTH and advance. Past months/years must NOT enter datePreference — stay and ask for a future date. Gibberish → {} + request_clarification. Never personality/vibe here.',
+        "memoryPatchHint": 'Valid: {"occasion": {"place": "Goa", "datePreference": "December 2026", "destinationMode": "destination"}, "earlySignals": {"personality": ["Foodies"], "vibe": ["Big & festive"]}}. If they give place + future month in one message, patch BOTH and advance. Early signals go in earlySignals, not canonical fields yet. Past months/years must NOT enter datePreference. Gibberish → {} + request_clarification.',
         "advanceCondition": "place + concrete FUTURE month/season in memory; advance reply asks about the COUPLE (s3), not setting",
         "stateless": True,
     },
@@ -155,18 +307,46 @@ GIBBERISH on s2: request_clarification + {}. Vary wording. Light humor OK once.
     StageId.S3_PERSONALITY.value: {
         "goal": "Capture who the couple is. YOU validate tags — reject gibberish; only meaningful personality/culture/relationship signals enter memoryPatch.",
         "rules": """
+CHECK EARLY SIGNALS FIRST:
+If memory.earlySignals.personality has values (from S2 or earlier) AND personality.tags is empty:
+- THIS IS YOUR FIRST TURN ON S3 with early signals
+- DO NOT patch personality yet
+- DO NOT advance yet
+- stageDecision.type = "stay", stageDecision.stage = "s3_personality"
+- Acknowledge them in plannerReply: "You mentioned you're [early signals] earlier — does that capture you two, or want to add more?"
+- Include them in suggestions alongside other chips
+- Wait for user confirmation in NEXT turn
+
+SECOND TURN (user confirms early signals):
+If user says ANY of these:
+- "yes" / "yeah" / "yep" / "correct" / "right" / "that's right" / "exactly" / "it is"
+- "keep those" / "keep that" / "keep them" / "keep it" / "go with it"
+- "use earlier ones" / "go with earlier" / "keep what I said" / "the ones I mentioned"
+- "I want to go with it" / "I don't want to update" / "no update" / "don't change"
+- "perfect" / "sounds good" / "that works"
+→ They mean USE earlySignals.personality
+→ memoryPatch.personality.tags = earlySignals.personality values
+→ stageDecision.type = "advance", stageDecision.stage = "s4_vibe"
+→ plannerReply: "Perfect! Now — what's the vibe you're going for? Big and festive, intimate, traditional?"
+→ NEVER ask the same confirmation question again
+
 ACCEPT → memoryPatch.personality:
 - tags: short meaningful labels from the chip pool OR clear custom phrases
   (e.g. "Foodies", "Travel lovers", "College sweethearts", "Punjabi family")
 - culturalSignals / relationshipSignals / lifestyleSignals when clear
 - Prefer 2+ tags before advancing
 
+EARLY SIGNALS for future stages:
+If they mention vibe words (festive, intimate), events (Mehndi), or budget on S3:
+- Acknowledge in plannerReply
+- Put in memoryPatch.earlySignals.vibe / earlySignals.events / earlySignals.budget
+- DO NOT put in vibe.primaryVibe or logistics yet
+
 REJECT → memoryPatch MUST be {}:
 - Gibberish / random keystrokes ("Asdfasidfu asg")
 - Cities, months, years (Delhi, March, 2026)
 - Occasion rehash ("Delhi, March 2026 — big festive…") — stay; ask about
   the couple, do not create personality tags from that paste
-- Vibe-only phrases ("festive", "intimate") — note in reply, do not tag as personality
 - Single meaningless word fragments
 
 If you cannot interpret the message: request_clarification + empty memoryPatch.
@@ -177,20 +357,40 @@ one answer. Do not treat that as misunderstanding.
 
 CRITICAL: When advancing to S4, ask a CLEAR vibe question.
 """.strip(),
-        "memoryPatchHint": 'If valid: {"personality": {"tags": ["Foodies", "..."], "culturalSignals": [], "relationshipSignals": [], "lifestyleSignals": []}}. If gibberish or unclear: memoryPatch = {} and request_clarification.',
+        "memoryPatchHint": 'FIRST turn with early signals: memoryPatch = {}, stay, ask for confirmation. SECOND turn (user says "yes"/"keep it"/"go with it"/"I don\'t want to update"): {"personality": {"tags": from earlySignals}}, advance to s4_vibe. Normal: {"personality": {"tags": ["Foodies", "..."]}}. If gibberish or unclear: memoryPatch = {} and request_clarification.',
         "advanceCondition": "2+ meaningful personality tags (never cities/dates/gibberish)",
         "stateless": False,
     },
 
     StageId.S4_VIBE.value: {
-        "goal": "Confirm primary vibe from chip pool. When you first land on S4 after advancing from S3, ask a CLEAR question: 'What's the vibe you're going for?' or 'What feeling/energy do you want?' Offer vibe chip suggestions. Acknowledge earlySignals.vibe from memory when present.",
+        "goal": "Confirm primary vibe from chip pool. When you first land on S4 after advancing from S3, ask a CLEAR question: 'What's the vibe you're going for?' or 'What feeling/energy do you want?' Offer vibe chip suggestions. Check earlySignals.vibe and acknowledge if present.",
         "rules": """
-CRITICAL FOR FIRST TURN ON S4: When you just advanced from S3 to S4, your
-plannerReply MUST end with a clear, direct question asking about the VIBE/FEELING
-of the wedding. Examples:
+CHECK EARLY SIGNALS FIRST:
+If memory.earlySignals.vibe has values (from S2/S3):
+- Acknowledge in plannerReply: "You mentioned [Big & festive] earlier — keep that or want to refine?"
+- Include early signal vibe in suggestions alongside alternatives
+- If they confirm, move earlySignals.vibe into memoryPatch.vibe.primaryVibe
+- If they change it, use their new selection
+
+USER REFERENCES TO "EARLIER" DATA:
+If user says ANY of these:
+- "yes" / "yeah" / "yep" / "correct" / "right" / "that's right" / "it is"
+- "keep that" / "keep it" / "go with it"
+- "use earlier" / "go with earlier" / "keep what I said" / "the one I mentioned"
+- "I want to go with it" / "I don't want to update" / "no update"
+- "perfect" / "sounds good" / "that works"
+→ They mean USE earlySignals.vibe
+→ memoryPatch.vibe.primaryVibe = first item from earlySignals.vibe (or normalize to chip pool)
+→ stageDecision.type = "advance"
+→ NEVER ask the same confirmation question again
+
+FIRST TURN ON S4 (just advanced from S3):
+Your plannerReply MUST end with a clear, direct question asking about the VIBE/FEELING.
+Examples:
 - "Now — what's the vibe you're going for? Big and festive, intimate, traditional?"
 - "Love it! What feeling do you want for the wedding? Pick a vibe or describe it."
 - "Perfect! Now tell me — what energy are you imagining? Festive, elegant, laid-back?"
+If earlySignals.vibe exists: "You mentioned Big & festive earlier — does that still feel right, or want something else?"
 NEVER leave them guessing what to answer next. Always offer vibe chip suggestions.
 
 ACCEPT → memoryPatch.vibe:
@@ -200,21 +400,22 @@ ACCEPT → memoryPatch.vibe:
   (e.g. "Sunset garden party", "Heritage glam")
 - secondaryVibes, energyLevel, formality, familyRole when clear
 
+EARLY SIGNALS for future stages:
+If they mention events (Mehndi, Sangeet), budget, or vendors on S4:
+- Acknowledge in plannerReply
+- Put in memoryPatch.earlySignals.events / earlySignals.budget / earlySignals.vendors
+
 REJECT → empty memoryPatch:
 - Gibberish
 - City / month as vibe ("Delhi", "March")
-- Occasion rehash paste — ask vibe question; if earlySignals.vibe exists,
-  ask "You mentioned Big & festive earlier — keep or change?"
+- Occasion rehash paste — ask vibe question
 - Personality chips in vibe fields
-
-MEMORY LOOKUP: If earlySignals.vibe or vibe.primaryVibe already set, acknowledge
-it in plannerReply instead of a blank "what's the vibe?"
 
 MORE SUGGESTIONS: If they ask for more vibe options beyond the chips shown,
 stay with empty memoryPatch and return fresh vibe labels in "suggestions"
 (not the same pool reshuffled). Fit to their place/personality when you can.
 """.strip(),
-        "memoryPatchHint": 'If valid: {"vibe": {"primaryVibe": "Big & festive", ...}}. Never city/month as primaryVibe. Gibberish → {} + request_clarification.',
+        "memoryPatchHint": 'If valid: {"vibe": {"primaryVibe": "Big & festive", ...}, "earlySignals": {"events": ["Mehndi", "Sangeet"]}}. Check earlySignals.vibe first and reference it. If user says "use earlier"/"go with those", they mean earlySignals.vibe. Never city/month as primaryVibe. Gibberish → {} + request_clarification.',
         "advanceCondition": "primaryVibe is a pool label; personality already filled",
         "stateless": False,
     },
@@ -252,13 +453,25 @@ REJECT:
     StageId.S7_EVENTS.value: {
         "goal": "Confirm which wedding functions/events they want. Ask about events — NOT colors, textures, or direction aesthetics. Offer event chips.",
         "rules": """
+CHECK EARLY SIGNALS FIRST:
+If memory.earlySignals.events has values (from S2/S3/S4):
+- Acknowledge in plannerReply: "You mentioned [Mehndi, Sangeet] earlier — are those the main events or want to add/change?"
+- Include early signal events in suggestions alongside other event chips
+- If they confirm with "yes"/"keep those"/"go with it"/"I don't want to update", move earlySignals.events into memoryPatch.logistics.events
+- If they modify, use their new list
+
 ACCEPT → memoryPatch.logistics.events (list of event names from pool when possible).
 Set logistics.eventsConfirmed = true ONLY when they say the list is final
 ("that's all", "only these", "lock it in").
 
+EARLY SIGNALS for future stages:
+If they mention budget or vendor preferences on S7:
+- Acknowledge in plannerReply
+- Put in memoryPatch.earlySignals.budget / earlySignals.vendors
+
 REJECT: personality/vibe patches; gibberish; aesthetic/color talk as events.
 """.strip(),
-        "memoryPatchHint": 'Patch logistics: {"events": ["Mehndi", "Sangeet", ...]}. Set eventsConfirmed only when user says the list is final.',
+        "memoryPatchHint": 'Patch logistics: {"events": ["Mehndi", "Sangeet", ...], "eventsConfirmed": true}. Check earlySignals.events first. Set eventsConfirmed only when user says the list is final.',
         "advanceCondition": "1+ events listed AND user confirmed the list is complete (e.g. 'that's all' / 'only these')",
         "stateless": False,
     },
@@ -278,11 +491,22 @@ REJECT: personality/vibe; missing counts for some events → stay and ask for mi
     StageId.S9_BUDGET.value: {
         "goal": "Get a comfortable total budget range in INR lakhs.",
         "rules": """
+CHECK EARLY SIGNALS FIRST:
+If memory.earlySignals.budget has a value (from earlier stages):
+- Acknowledge in plannerReply: "You mentioned [budget] earlier — is that still the range or want to adjust?"
+- If they confirm with "yes"/"keep that"/"go with it"/"I don't want to update", move earlySignals.budget into memoryPatch.logistics.budget
+- If they change it, use their new range
+
 ACCEPT → memoryPatch.logistics.budget: { "range": "40-60 lakhs", "currency": "INR" }
+
+EARLY SIGNALS for future stages:
+If they mention vendor preferences on S9:
+- Acknowledge in plannerReply
+- Put in memoryPatch.earlySignals.vendors
 
 REJECT: gibberish; vendor lists; vague "not sure" without a range → stay and clarify.
 """.strip(),
-        "memoryPatchHint": 'Patch logistics: {"budget": {"range": "40-60 lakhs", "currency": "INR"}}',
+        "memoryPatchHint": 'Patch logistics: {"budget": {"range": "40-60 lakhs", "currency": "INR"}}. Check earlySignals.budget first.',
         "advanceCondition": "budget.range filled",
         "stateless": False,
     },
@@ -290,11 +514,17 @@ REJECT: gibberish; vendor lists; vague "not sure" without a range → stay and c
     StageId.S10_VENDORS.value: {
         "goal": "Capture vendor category priorities per event day.",
         "rules": """
+CHECK EARLY SIGNALS FIRST:
+If memory.earlySignals.vendors has values (from earlier stages):
+- Acknowledge in plannerReply: "You mentioned [vendor preferences] earlier — keep those or want to adjust?"
+- If they confirm with "yes"/"keep those"/"go with it"/"I don't want to update", move earlySignals.vendors into memoryPatch.logistics.vendorPreferences
+- If they modify, use their new preferences
+
 ACCEPT → memoryPatch.logistics.vendorPreferences (keyed preferences).
 
 REJECT: gibberish; rewriting earlier occasion/personality unless explicit correction.
 """.strip(),
-        "memoryPatchHint": 'Patch logistics: {"vendorPreferences": {"photography": "candid", "entertainment": "Sufi + Bollywood DJ"}}',
+        "memoryPatchHint": 'Patch logistics: {"vendorPreferences": {"photography": "candid", "entertainment": "Sufi + Bollywood DJ"}}. Check earlySignals.vendors first.',
         "advanceCondition": "vendorPreferences has at least one entry",
         "stateless": False,
     },
@@ -507,8 +737,11 @@ class StagePolicy:
 
             if will_have_place and will_have_time:
                 notes.append(
-                    "After this patch S2 will be COMPLETE → stageDecision.type=advance, "
-                    "acknowledge place+date, ask about the COUPLE (s3). Do not ask about setting."
+                    "After this patch S2 will be COMPLETE → stageDecision.type=advance to s3_personality. "
+                    "If your memoryPatch contains earlySignals (personality/vibe/events/budget), "
+                    "follow the ADVANCE WITH EARLY SIGNALS rule: acknowledge place+date, "
+                    "reference the early signals, ask for confirmation. "
+                    "If no early signals, ask a fresh personality question."
                 )
                 return " ".join(notes)
 
@@ -527,8 +760,18 @@ class StagePolicy:
         if stage == StageId.S3_PERSONALITY.value:
             from app.services.text_extract import filter_tags
             tags = filter_tags((memory.get("personality") or {}).get("tags") or [])
+            early_p = (memory.get("earlySignals") or {}).get("personality") or []
+            
+            # Check for early signals on first turn
+            if early_p and not tags:
+                return (
+                    f"FIRST TURN ON S3: earlySignals.personality = {early_p} exists BUT personality.tags is empty. "
+                    f"Follow EARLY SIGNALS rules: Ask for confirmation, do NOT patch yet, STAY on S3."
+                )
+            
             if StagePolicy.is_stage_complete(stage, memory):
                 return "S3 COMPLETE — you may advance to s4_vibe and ask about vibe."
+            
             return (
                 f"Have tags: {tags or '(none)'}. "
                 f"Need 2+ meaningful tags (or 1 + relationship/lifestyle). Stay; ask about the couple."
@@ -536,11 +779,20 @@ class StagePolicy:
 
         if stage == StageId.S4_VIBE.value:
             from app.domain.memory_schema import resolve_primary_vibe
-            if resolve_primary_vibe(memory):
+            primary = resolve_primary_vibe(memory)
+            early_v = (memory.get("earlySignals") or {}).get("vibe") or []
+            
+            # Check for early vibe signals on first turn
+            if early_v and not primary:
+                return (
+                    f"FIRST TURN ON S4: earlySignals.vibe = {early_v} exists BUT vibe.primaryVibe is empty. "
+                    f"Follow EARLY SIGNALS rules: Ask for confirmation, do NOT patch yet, STAY on S4."
+                )
+            
+            if primary:
                 return "S4 COMPLETE — you may advance (brief synthesis follows)."
-            early = (memory.get("earlySignals") or {}).get("vibe") or []
-            hint = f" earlySignals.vibe={early}." if early else ""
-            return f"S4 INCOMPLETE — need vibe pool primaryVibe.{hint} Stay; ask vibe only."
+            
+            return "S4 INCOMPLETE — need vibe.primaryVibe. Stay; ask vibe only."
 
         if StagePolicy.is_stage_complete(stage, memory):
             return f"Stage {stage} complete in memory — you may propose advance if this turn confirms it."
@@ -618,12 +870,19 @@ class StagePolicy:
             return StageDecisionType.STAY.value, current_stage, "open_questions_block_advance"
 
         # Memory-complete stages advance automatically (backend owns movement)
+        # BUT: Honor explicit AI STAY decision (e.g., asking for early signals confirmation)
         # S5 brief is advanced via auto-synthesis after S4, not conversation_turn
         if current_stage == StageId.S5_BRIEF.value:
             if is_valid and ai_decision_type == StageDecisionType.STAY.value:
                 return ai_decision_type, ai_to_stage, "ai_stay"
             return StageDecisionType.STAY.value, current_stage, "awaiting_brief_synthesis"
 
+        # CRITICAL: If AI explicitly said STAY, honor it even if memory is complete
+        # This allows agent to ask for confirmation when patching early signals
+        if is_valid and ai_decision_type == StageDecisionType.STAY.value:
+            return ai_decision_type, ai_to_stage, "ai_stay_respected"
+
+        # Auto-advance when memory is complete AND agent didn't explicitly stay
         if StagePolicy.is_stage_complete(current_stage, memory):
             try:
                 next_stage = StageId(current_stage).next_stage()
@@ -639,7 +898,7 @@ class StagePolicy:
                     return (
                         StageDecisionType.ADVANCE.value,
                         next_stage.value,
-                        "memory_complete",
+                        "memory_complete_auto_advance",
                     )
 
         # Never honor model "advance" when this stage has a completeness check and fails it.
@@ -664,9 +923,6 @@ class StagePolicy:
         # Honor a valid AI advance only for stages without tight completeness gates
         if is_valid and ai_decision_type == StageDecisionType.ADVANCE.value:
             return ai_decision_type, ai_to_stage, "ai_advance"
-
-        if is_valid and ai_decision_type == StageDecisionType.STAY.value:
-            return ai_decision_type, ai_to_stage, "ai_stay"
 
         return StageDecisionType.STAY.value, current_stage, "continue_gathering"
 
