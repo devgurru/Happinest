@@ -30,8 +30,8 @@ async def create_session(
     """
     result = await process_s1_names(
         db,
-        client_name=payload.clientName.strip(),
-        partner_name=payload.partnerName.strip(),
+        groom_name=payload.groomName.strip(),
+        bride_name=payload.brideName.strip(),
     )
     return _to_response(result)
 

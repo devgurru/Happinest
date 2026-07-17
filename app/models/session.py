@@ -1,5 +1,5 @@
 """
-Session model — root aggregate for one client planning journey.
+Session model — root aggregate for one couple's planning journey.
 One session = one couple's full planning conversation.
 """
 import uuid
@@ -38,8 +38,8 @@ class Session(Base):
     )
 
     # Convenience projections from identity memory
-    client_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    partner_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    groom_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bride_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     occasion_type: Mapped[str] = mapped_column(
         String(50), nullable=False, default="wedding"

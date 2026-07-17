@@ -38,8 +38,8 @@ def _load_template(name: str) -> string.Template:
 
 def _client_names(memory: dict) -> str:
     identity = memory.get("identity") or {}
-    client = (identity.get("clientName") or "").strip()
-    partner = (identity.get("partnerName") or "").strip()
+    client = (identity.get("groomName") or "").strip()
+    partner = (identity.get("brideName") or "").strip()
     if client and partner:
         return f"{client} & {partner}"
     return client or partner or "the couple"

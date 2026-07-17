@@ -110,15 +110,15 @@ def _response_dict(
 
 async def process_s1_names(
     db: AsyncSession,
-    client_name: str,
-    partner_name: str,
+    groom_name: str,
+    bride_name: str,
 ) -> dict:
     """
     S1 — System-handled. No AI call.
     Creates session, seeds identity memory, advances to S2.
     """
     request_id = uuid.uuid4()
-    session, memory_v0 = await SessionService.create_session(db, client_name, partner_name)
+    session, memory_v0 = await SessionService.create_session(db, groom_name, bride_name)
 
     # Advance to S2
     await SessionService.update_stage(
@@ -130,7 +130,7 @@ async def process_s1_names(
 
     # Save the planner welcome message
     welcome = (
-        f"Lovely to meet you both, {client_name} and {partner_name}! 💕 "
+        f"Lovely to meet you both, {groom_name} and {bride_name}! 💕 "
         f"What wedding destination are you dreaming of, and what time of year are you planning for?"
     )
     await SessionService.append_message(
@@ -240,7 +240,7 @@ def _summarize_correction_for_reply(
         elif section == "identity":
             a = memory_after.get("identity") or {}
             parts.append(
-                f"names → {a.get('displayName') or ((a.get('clientName') or '') + ' & ' + (a.get('partnerName') or ''))}"
+                f"names → {a.get('displayName') or ((a.get('groomName') or '') + ' & ' + (a.get('brideName') or ''))}"
             )
     if not parts:
         return ""
@@ -768,6 +768,16 @@ async def process_conversation_turn(
                 memory = new_mem_version.memory_json
                 updated_version = new_mem_version.version_no
                 stale_sections = new_mem_version.stale_sections
+
+        # Sync session name columns when identity names are patched
+        if "identity" in patch:
+            identity_patch = patch["identity"]
+            await SessionService.update_names(
+                db,
+                session,
+                groom_name=identity_patch.get("groomName") or None,
+                bride_name=identity_patch.get("brideName") or None,
+            )
     else:
         correction = None
 

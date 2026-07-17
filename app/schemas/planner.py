@@ -66,12 +66,14 @@ class PlannerResponse(BaseModel):
 # ── Session ──────────────────────────────────────────────────────────────────
 
 class CreateSessionRequest(BaseModel):
-    clientName: str = Field(..., min_length=1, max_length=100)
-    partnerName: str = Field("", max_length=100)
+    groomName: str = Field(..., min_length=1, max_length=100)
+    brideName: str = Field("", max_length=100)
 
 
 class SessionSummary(BaseModel):
     sessionId: str
+    groomName: str | None
+    brideName: str | None
     displayName: str | None
     currentStage: str
     memoryVersion: int
@@ -83,6 +85,8 @@ class SessionSummary(BaseModel):
     def from_orm(cls, s: Any) -> "SessionSummary":
         return cls(
             sessionId=str(s.id),
+            groomName=s.groom_name,
+            brideName=s.bride_name,
             displayName=s.display_name,
             currentStage=s.current_stage,
             memoryVersion=s.memory_version,

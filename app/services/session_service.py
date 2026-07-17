@@ -20,18 +20,18 @@ class SessionService:
     @staticmethod
     async def create_session(
         db: AsyncSession,
-        client_name: str,
-        partner_name: str,
+        groom_name: str,
+        bride_name: str,
     ) -> tuple[Session, SessionMemoryVersion]:
         """Create a new session + initial memory version (v0)."""
-        display_name = f"{client_name} & {partner_name}" if partner_name else client_name
+        display_name = f"{groom_name} & {bride_name}" if bride_name else groom_name
 
         session = Session(
             current_stage=StageId.S1_NAMES.value,
             memory_version=0,
             status=SessionStatus.ACTIVE.value,
-            client_name=client_name,
-            partner_name=partner_name,
+            groom_name=groom_name,
+            bride_name=bride_name,
             display_name=display_name,
             occasion_type="wedding",
             started_at=datetime.now(timezone.utc),
@@ -42,8 +42,8 @@ class SessionService:
 
         # Seed initial memory with identity already filled
         initial_memory = fresh_memory()
-        initial_memory["identity"]["clientName"] = client_name
-        initial_memory["identity"]["partnerName"] = partner_name
+        initial_memory["identity"]["groomName"] = groom_name
+        initial_memory["identity"]["brideName"] = bride_name
         initial_memory["identity"]["displayName"] = display_name
 
         memory_v0 = SessionMemoryVersion(
@@ -149,6 +149,33 @@ class SessionService:
         messages = list(result.scalars().all())
         messages.reverse()
         return messages
+
+    @staticmethod
+    async def update_names(
+        db: AsyncSession,
+        session: Session,
+        groom_name: str | None = None,
+        bride_name: str | None = None,
+    ) -> None:
+        """
+        Sync groom_name, bride_name, and display_name on the session row
+        whenever the identity memory is patched with new names.
+        Only updates fields that are supplied (not None).
+        """
+        changed = False
+        if groom_name is not None and session.groom_name != groom_name:
+            session.groom_name = groom_name
+            changed = True
+        if bride_name is not None and session.bride_name != bride_name:
+            session.bride_name = bride_name
+            changed = True
+        if changed:
+            g = session.groom_name or ""
+            b = session.bride_name or ""
+            session.display_name = f"{g} & {b}" if g and b else (g or b)
+            session.last_activity_at = datetime.now(timezone.utc)
+            db.add(session)
+            await db.flush()
 
     @staticmethod
     async def get_recent_messages(

@@ -8,8 +8,8 @@ import copy
 
 DEFAULT_PLANNER_MEMORY: dict = {
     "identity": {
-        "clientName": "",
-        "partnerName": "",
+        "groomName": "",
+        "brideName": "",
         "displayName": "",
         "occasionType": "wedding",
     },
@@ -211,8 +211,9 @@ def build_planner_notes_view(memory: dict) -> dict:
     direction = memory.get("direction", {})
     logistics = memory.get("logistics", {})
 
-    client = identity.get("clientName", "")
-    partner = identity.get("partnerName", "")
+    client = identity.get("groomName", "")
+    partner = identity.get("brideName", "")
+
     couple = f"{client} & {partner}" if client and partner else client or partner or ""
 
     place = occasion.get("place", "")
