@@ -56,6 +56,20 @@ class StageDecisionType(str, Enum):
     JUMP                  = "jump"                  # Jump to different stage
     REQUEST_CLARIFICATION = "request_clarification" # Stay, ask focused follow-up
 
+# ─── Turn Intent Types ────────────────────────────────────────────────────────
+# Classification of what a client's conversation_turn message is trying to do.
+# Currently produced by the Call-1 intent LLM; targeted for local rule resolution
+# so the intent classification no longer requires an LLM round-trip.
+
+class IntentType(str, Enum):
+    NORMAL           = "normal"           # Answering the current stage with usable content
+    GIBBERISH        = "gibberish"        # Random keystrokes / unintelligible nonsense
+    HELP             = "help"             # Asking what a stage/chip means or how to answer
+    MORE_SUGGESTIONS = "more_suggestions" # Asking for more/other/different suggestion chips
+    CLARIFICATION    = "clarification"    # Vague/incomplete answer, not mash, not a help question
+    CORRECTION       = "correction"       # Changing earlier info from a later stage
+
+
 # ─── Response Sources ─────────────────────────────────────────────────────────
 
 class ResponseSource(str, Enum):

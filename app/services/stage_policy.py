@@ -38,8 +38,6 @@ from __future__ import annotations
 
 from app.domain.enums import (
     ALLOWED_TRANSITIONS,
-    AI_REQUIRED_STAGES,
-    SYNTHESIS_STAGES,
     StageDecisionType,
     StageId,
     SynthesisType,
@@ -338,20 +336,6 @@ class StagePolicy:
     """
 
     @staticmethod
-    def is_ai_required(stage: str) -> bool:
-        try:
-            return StageId(stage) in AI_REQUIRED_STAGES
-        except ValueError:
-            return False
-
-    @staticmethod
-    def is_synthesis_stage(stage: str) -> bool:
-        try:
-            return StageId(stage) in SYNTHESIS_STAGES
-        except ValueError:
-            return False
-
-    @staticmethod
     def validate_transition(from_stage: str, to_stage: str, decision_type: str) -> tuple[bool, str | None]:
         """
         Returns (is_valid, error_reason).
@@ -547,36 +531,6 @@ class StagePolicy:
         return f"Stage {stage} not complete — stay and ask only for what this stage still needs."
 
     @staticmethod
-    def events_finalize_cue(message: str) -> bool:
-        """User signals the event list is complete."""
-        msg_l = message.lower()
-        return any(
-            cue in msg_l
-            for cue in (
-                "that's all", "thats all", "only these", "just these", "no other",
-                "no others", "that's it", "thats it", "done with events",
-                "these are the events", "only want", "just want these",
-            )
-        )
-
-    @staticmethod
-    def resolve_final_decision(
-        ai_decision_type: str,
-        ai_to_stage: str,
-        current_stage: str,
-    ) -> tuple[str, str]:
-        """
-        Given AI's proposed decision, returns the backend-validated (decision_type, to_stage).
-        If AI proposal is invalid, defaults to STAY on current stage.
-        """
-        is_valid, _ = StagePolicy.validate_transition(
-            current_stage, ai_to_stage, ai_decision_type
-        )
-        if is_valid:
-            return ai_decision_type, ai_to_stage
-        return StageDecisionType.STAY.value, current_stage
-
-    @staticmethod
     def resolve_final_decision_with_memory(
         ai_decision_type: str,
         ai_to_stage: str,
@@ -696,26 +650,6 @@ class StagePolicy:
             StageId.S11_SUMMARY.value: SynthesisType.SUMMARY.value,
         }
         return mapping.get(stage)
-
-    @staticmethod
-    def get_stage_rules(stage: str) -> str:
-        """
-        Get full agent rule block for the current stage.
-        This is injected into the LLM prompt.
-        """
-        config = STAGE_CONFIG.get(stage)
-        if not config:
-            return f"{GLOBAL_AGENT_RULES}\n\nPatch only fields relevant to this stage. Reject gibberish."
-        
-        stage_block = f"""## STAGE RULES — {stage}
-GOAL: {config['goal']}
-
-{config['rules']}
-
-ADVANCE when: {config['advanceCondition']}
-""".strip()
-        
-        return f"{GLOBAL_AGENT_RULES}\n\n{stage_block}"
 
     @staticmethod
     def get_stage_rules_for_intent(

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import (
-    ArtifactStatus, ArtifactType, EventType, MessageRole, MessageType,
+    ArtifactStatus, ArtifactType, EventType, IntentType, MessageRole, MessageType,
     ResponseSource, StageDecisionType, StageId, SynthesisType,
 )
 from app.domain.memory_schema import (
@@ -40,6 +40,7 @@ from app.services.prompt_builder import (
     build_turn_intent_prompt,
 )
 from app.services.response_validator import validate_ai_response, validate_synthesis_response
+from app.services.intent import TurnIntent
 from app.services.session_service import SessionService
 from app.services.stage_policy import StagePolicy
 from app.services.planner_reply_policy import align_planner_reply
@@ -623,12 +624,7 @@ async def process_conversation_turn(
     ]
 
     # ── Call 1: intent classification ─────────────────────────────────────
-    turn_intent: dict = {
-        "intentType": "normal",
-        "targetSections": [],
-        "decisionHint": "stay",
-        "summary": "",
-    }
+    turn_intent = TurnIntent.default()
     intent_telemetry: dict = {}
     try:
         intent_raw, intent_telemetry = await call_llm(
@@ -636,15 +632,7 @@ async def process_conversation_turn(
             stage,
             EventType.CONVERSATION_TURN.value,
         )
-        if isinstance(intent_raw, dict):
-            turn_intent = {
-                "intentType": str(intent_raw.get("intentType") or "normal"),
-                "targetSections": [
-                    s for s in (intent_raw.get("targetSections") or []) if isinstance(s, str)
-                ],
-                "decisionHint": str(intent_raw.get("decisionHint") or "stay"),
-                "summary": str(intent_raw.get("summary") or ""),
-            }
+        turn_intent = TurnIntent.from_llm(intent_raw)
     except AIGatewayError:
         # Fall through with default normal intent — Call 2 still runs
         pass
@@ -695,26 +683,26 @@ async def process_conversation_turn(
     ai_result = sanitize_ai_response(ai_result, stage)
 
     # Honor intent when call-2 missed the empty-patch / decision shape
-    intent_type = turn_intent.get("intentType") or "normal"
-    if intent_type == "gibberish":
+    intent_type = turn_intent.intent_type
+    if intent_type == IntentType.GIBBERISH:
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.REQUEST_CLARIFICATION.value,
             "stage": stage,
         }
-    elif intent_type == "help":
+    elif intent_type == IntentType.HELP:
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.STAY.value,
             "stage": stage,
         }
-    elif intent_type == "more_suggestions":
+    elif intent_type == IntentType.MORE_SUGGESTIONS:
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.STAY.value,
             "stage": stage,
         }
-    elif intent_type == "correction" and turn_intent.get("decisionHint") == "reanchor":
+    elif intent_type == IntentType.CORRECTION and turn_intent.decision_hint == StageDecisionType.REANCHOR.value:
         sd = ai_result.get("stageDecision") or {}
         if sd.get("type") == StageDecisionType.ADVANCE.value:
             ai_result["stageDecision"] = {
@@ -817,8 +805,8 @@ async def process_conversation_turn(
             open_questions=open_questions,
         )
         if (
-            turn_intent.get("intentType") == "correction"
-            and turn_intent.get("decisionHint") == StageDecisionType.REANCHOR.value
+            turn_intent.intent_type == IntentType.CORRECTION
+            and turn_intent.decision_hint == StageDecisionType.REANCHOR.value
         ):
             final_decision_type = StageDecisionType.REANCHOR.value
             final_stage = stage
@@ -942,7 +930,7 @@ async def process_conversation_turn(
         memory,
         ai_result.get("suggestions", []),
         for_stage=suggestion_stage,
-        prefer_custom=(turn_intent.get("intentType") == "more_suggestions"),
+        prefer_custom=(turn_intent.intent_type == IntentType.MORE_SUGGESTIONS),
     )
     suggestions = [
         s for s in suggestions

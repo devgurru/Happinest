@@ -6,6 +6,7 @@ import string
 from pathlib import Path
 
 from app.domain.chip_pools import format_chip_pool_for_prompt
+from app.services.intent import TurnIntent
 from app.services.stage_policy import StagePolicy
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -87,7 +88,7 @@ def build_conversation_turn_prompt(
     recent_messages: list[dict],
     user_message: str,
     *,
-    intent: dict | None = None,
+    intent: TurnIntent | None = None,
 ) -> list[dict]:
     """Call 2 — planner reply + memoryPatch using current + intent-driven stage rules."""
     template = _load_template("conversation_turn")
@@ -97,15 +98,13 @@ def build_conversation_turn_prompt(
         recent_messages, limit=8 if stage == "s2_basics" else 12
     )
 
-    intent = intent or {}
-    target_sections = [
-        s for s in (intent.get("targetSections") or []) if isinstance(s, str)
-    ]
+    intent = intent or TurnIntent.default()
+    target_sections = [s for s in intent.target_sections if isinstance(s, str)]
     stage_rules = StagePolicy.get_stage_rules_for_intent(
         stage,
         target_sections,
-        intent_type=str(intent.get("intentType") or "normal"),
-        intent_summary=str(intent.get("summary") or ""),
+        intent_type=intent.intent_type.value,
+        intent_summary=intent.summary,
     )
 
     system_content = template.safe_substitute(
@@ -115,9 +114,9 @@ def build_conversation_turn_prompt(
         advance_condition=stage_ctx.get("advanceCondition", "When enough information is captured."),
         stage_gaps=StagePolicy.get_stage_gap_guide(stage, memory, user_message),
         stage_rules=stage_rules,
-        intent_summary=str(intent.get("summary") or "Normal answer for current stage"),
-        intent_type=str(intent.get("intentType") or "normal"),
-        decision_hint=str(intent.get("decisionHint") or "stay"),
+        intent_summary=intent.summary or "Normal answer for current stage",
+        intent_type=intent.intent_type.value,
+        decision_hint=intent.decision_hint,
         target_sections=", ".join(target_sections) or "(current stage)",
         memory_json=json.dumps(_slim_memory(memory, stage), indent=2),
         chip_pool=chip_pool_str or "None for this stage",
@@ -148,31 +147,6 @@ def build_brief_synthesis_prompt(memory: dict, version_no: int) -> list[dict]:
     template = _load_template("brief_synthesis")
     return _with_json_prefill(template.safe_substitute(
         memory_json=json.dumps(memory, indent=2),
-        version_no=version_no,
-    ))
-
-
-def build_direction_synthesis_prompt(
-    memory: dict,
-    brief_text: str,
-    candidate_sites: list[dict],
-    version_no: int,
-) -> list[dict]:
-    template = _load_template("direction_synthesis")
-    candidates_text = ""
-    for i, site in enumerate(candidate_sites, 1):
-        p = site.get("profile_json", {})
-        candidates_text += (
-            f"\n{i}. **{site['name']}** (slug: {site['slug']})\n"
-            f"   Type: {site.get('site_type', '')}\n"
-            f"   Description: {site.get('short_description', '')}\n"
-            f"   Style: {', '.join(p.get('styleTags', []))}\n"
-            f"   Vibe: {', '.join(p.get('vibeTags', []))}\n"
-        )
-    return _with_json_prefill(template.safe_substitute(
-        memory_json=json.dumps(memory, indent=2),
-        brief_text=brief_text,
-        candidate_sites=candidates_text.strip(),
         version_no=version_no,
     ))
 
