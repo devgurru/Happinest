@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # Vision model — used for image analysis (multimodal)
+    GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
 
     # Embeddings — keep local Ollama by default (pgvector dims = nomic-embed-text)
     # Direction matching depends on this; do not switch casually.
@@ -83,6 +85,14 @@ class Settings(BaseSettings):
             return self.GROK_MODEL
         if self.llm_provider == "groq":
             return self.GROQ_MODEL
+        return self.OLLAMA_MODEL
+
+    @property
+    def active_vision_model(self) -> str:
+        """Model used for image analysis (multimodal). Groq only for now."""
+        if self.llm_provider == "groq":
+            return self.GROQ_VISION_MODEL
+        # Ollama vision model if local — assumes llava or gemma3 vision variant
         return self.OLLAMA_MODEL
 
 

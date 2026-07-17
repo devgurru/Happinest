@@ -298,3 +298,99 @@ async def call_llm(
             break
 
     raise last_error or AIGatewayError("UNKNOWN", "Unknown AI gateway error")
+
+
+async def call_vision_llm(
+    text_prompt: str,
+    image_b64_list: list[str],
+    stage: str,
+) -> tuple[dict, dict]:
+    """
+    Call the vision-capable model with text + base64-encoded images.
+    Images are passed in-memory only — never stored on disk.
+    Maximum 3 images enforced by caller.
+
+    Returns (parsed_result, telemetry).
+    Raises AIGatewayError on failure.
+    """
+    provider = settings.llm_provider
+    model = settings.active_vision_model
+    telemetry = _base_telemetry(model, provider)
+
+    # Build multimodal message: text + image_url blocks (base64 data URIs)
+    content_parts: list[dict] = [{"type": "text", "text": text_prompt}]
+    for b64 in image_b64_list[:3]:
+        # Accept both raw base64 and data URI strings
+        if b64.startswith("data:"):
+            data_uri = b64
+        else:
+            data_uri = f"data:image/jpeg;base64,{b64}"
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": data_uri},
+        })
+
+    messages = [{"role": "user", "content": content_parts}]
+
+    if provider in ("grok", "groq"):
+        api_key = settings.GROQ_API_KEY if provider == "groq" else settings.GROK_API_KEY
+        base_url = settings.GROQ_BASE_URL if provider == "groq" else settings.GROK_BASE_URL
+        error_prefix = "GROQ_VISION" if provider == "groq" else "GROK_VISION"
+        label = "Groq Vision" if provider == "groq" else "Grok Vision"
+        t0 = time.monotonic()
+        try:
+            parsed = await _call_openai_compatible(
+                label=label,
+                error_prefix=error_prefix,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                messages=messages,
+                telemetry=telemetry,
+                prefer_json_object=False,  # Vision models may not support response_format
+            )
+            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+            return parsed, telemetry
+        except Exception as e:
+            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+            if isinstance(e, AIGatewayError):
+                raise
+            raise AIGatewayError(
+                code=f"{error_prefix}_FAILED",
+                message=str(e),
+            ) from e
+    else:
+        # Ollama — attempt multimodal; fall back gracefully if model doesn't support it
+        t0 = time.monotonic()
+        url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.2, "num_predict": 1500},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                resp = await client.post(url, json=payload)
+            telemetry["http_status"] = resp.status_code
+            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+            if resp.status_code != 200:
+                raise AIGatewayError(
+                    code="OLLAMA_VISION_HTTP_ERROR",
+                    message=f"Ollama vision returned HTTP {resp.status_code}: {resp.text[:300]}",
+                    http_status=resp.status_code,
+                )
+            data = resp.json()
+            raw_text = data.get("message", {}).get("content", "")
+            raw_text = _normalize_raw_text(raw_text)
+            telemetry["input_tokens"] = data.get("prompt_eval_count")
+            telemetry["output_tokens"] = data.get("eval_count")
+            return _extract_json(raw_text), telemetry
+        except AIGatewayError:
+            raise
+        except Exception as e:
+            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+            raise AIGatewayError(
+                code="OLLAMA_VISION_FAILED",
+                message=str(e),
+            ) from e

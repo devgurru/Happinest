@@ -31,6 +31,7 @@ from app.services.correction_policy import (
     resolve_correction_stage_decision,
 )
 from app.services.embedding_service import find_matching_event_sites
+from app.services.image_service import analyse_images
 from app.services.memory_service import MemoryService
 from app.services.observability import log_ai_turn
 from app.services.prompt_builder import (
@@ -583,9 +584,17 @@ async def process_conversation_turn(
     db: AsyncSession,
     session_id: uuid.UUID,
     user_message: str,
+    images: list[str] | None = None,
 ) -> dict:
-    """Main pipeline for conversation_turn event type."""
+    """Main pipeline for conversation_turn event type.
+
+    Optional images (base64) are analysed first via the vision model.
+    The extracted visual signals are merged into memory as earlySignals
+    before the regular intent/conversation pipeline runs.
+    Images are never stored to disk or database.
+    """
     request_id = uuid.uuid4()
+    images = images or []
 
     # 1. Load session
     session = await SessionService.get_session(db, session_id)
@@ -601,6 +610,21 @@ async def process_conversation_turn(
         raise ValueError(f"No memory for session {session_id}")
     memory = mem_version.memory_json
     memory_before = copy.deepcopy(memory)
+
+    # 2.5  Image analysis (Step 0) — run BEFORE intent so the text pipeline
+    #       sees the enriched memory with visual signals already applied.
+    #       Images are analysed in-memory; nothing is persisted to disk/DB.
+    image_planner_note: str = ""
+    if images:
+        vis_patch, image_planner_note, _vis_telemetry = await analyse_images(
+            images, stage, memory
+        )
+        if vis_patch:
+            vis_mem = await MemoryService.apply_patch(
+                db, session, vis_patch, request_id=request_id
+            )
+            memory = vis_mem.memory_json
+            memory_before = copy.deepcopy(memory)  # treat enriched memory as new baseline
 
     # Special: at s5_brief, "show me directions" triggers direction synthesis
     if stage == StageId.S5_BRIEF.value and _is_direction_request(user_message):
@@ -656,6 +680,7 @@ async def process_conversation_turn(
         recent_messages=history_for_prompt,
         user_message=user_message,
         intent=turn_intent,
+        image_context=image_planner_note,  # vision model note — LLM writes ONE cohesive reply
     )
 
     telemetry: dict = {}
@@ -795,6 +820,9 @@ async def process_conversation_turn(
             updated_version = sync.version_no
 
     # Save client message with post-patch chip snapshot
+    _client_meta: dict = {"selectedChips": build_selected_chips(memory)}
+    if images:
+        _client_meta["imageCount"] = len(images)
     await SessionService.append_message(
         db,
         session_id=session_id,
@@ -804,7 +832,7 @@ async def process_conversation_turn(
         stage=stage,
         source=None,
         request_id=request_id,
-        metadata={"selectedChips": build_selected_chips(memory)},
+        metadata=_client_meta,
     )
 
     # 9. Resolve stage decision — backend policy owns final movement
@@ -976,6 +1004,10 @@ async def process_conversation_turn(
         correction=correction,
         correction_ack=correction_ack,
     )
+
+    # NOTE: image_planner_note is passed into the prompt (image_context) above —
+    # the text LLM writes the acknowledgement organically into plannerReply.
+    # No prepend needed here.
 
     await SessionService.append_message(
         db,

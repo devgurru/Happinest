@@ -128,8 +128,10 @@ class MessageOut(BaseModel):
 # ── Turn ─────────────────────────────────────────────────────────────────────
 
 class TurnRequest(BaseModel):
+    """Kept for documentation / SDK generation only.
+    The actual /turn endpoint uses multipart/form-data — see conversation.py."""
     eventType: str = Field(..., description="conversation_turn | synthesis_request")
-    message: str | None = None          # required for conversation_turn
+    message: str | None = None
 
 
 # ── Reference ────────────────────────────────────────────────────────────────

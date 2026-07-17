@@ -698,7 +698,10 @@ class StagePolicy:
         so stay/advance + question stay aligned.
         """
         from datetime import date
-        today = date.today().isoformat()
+        today_obj = date.today()
+        today = today_obj.isoformat()
+        next_year = today_obj.year + 1
+        this_year = today_obj.year
         msg = (user_message or "").strip()
 
         if stage == StageId.S2_BASICS.value:
@@ -707,31 +710,74 @@ class StagePolicy:
                 extract_place_from_message,
                 get_occasion_state,
                 is_past_date,
+                _resolve_relative_timing,
             )
             state = get_occasion_state(memory)
             place_in_msg = extract_place_from_message(msg) if msg else None
             timing_in_msg = extract_month_or_season(msg) if msg else {}
             raw_date = (timing_in_msg.get("datePreference") or "").strip()
             season_in_msg = (timing_in_msg.get("seasonPreference") or "").strip()
-            date_past = bool(raw_date and is_past_date(raw_date))
+
+            # ── Key fix: if month-only extracted but memory already has a year,
+            # combine them before checking past/future.
+            # e.g. raw_date="June", memory has datePreference="2027"
+            # → check "June 2027" (future) not bare "June" (past this year).
+            import re as _re
+            effective_date = raw_date
+            mem_occasion = memory.get("occasion") or {}
+            mem_date = (mem_occasion.get("datePreference") or "").strip()
+            mem_year_match = _re.search(r"\b(20\d{2})\b", mem_date) if mem_date else None
+            if raw_date and mem_year_match and not _re.search(r"\b\d{4}\b", raw_date):
+                # raw_date is month-only, memory has an explicit year
+                effective_date = f"{raw_date} {mem_year_match.group(1)}"
+
+            date_past = bool(effective_date and is_past_date(effective_date))
 
             will_have_place = state["has_place"] or bool(place_in_msg)
             will_have_time = state["has_time"] or bool(season_in_msg) or (
                 bool(raw_date) and not date_past
             )
 
-            notes = [f"Today: {today}."]
+            notes = [f"Today: {today}. Next year = {next_year}."]
+
+            # Relative timing — tell agent the resolved concrete value
+            msg_l = msg.lower()
+            if _re.search(r"\b(next year|coming year|year after)\b", msg_l) and not _re.search(r"\b20\d{2}\b", msg):
+                notes.append(
+                    f"Message says 'next year' — resolved to {next_year}. "
+                    f"Patch occasion.datePreference=\"{next_year}\" (the concrete year, not the phrase)."
+                )
+            elif _re.search(r"\b(this year|current year)\b", msg_l) and not _re.search(r"\b20\d{2}\b", msg):
+                notes.append(
+                    f"Message says 'this year' — resolved to {this_year}. "
+                    f"Patch occasion.datePreference=\"{this_year}\"."
+                )
+
             if place_in_msg:
                 notes.append(f"This message includes place → patch occasion.place=\"{place_in_msg}\".")
             if raw_date and date_past:
-                notes.append(
-                    f"This message includes \"{raw_date}\" but that is PAST — "
-                    f"do NOT put it in datePreference. Stay and ask for a FUTURE month/year."
-                )
+                if effective_date != raw_date:
+                    # Was month-only, combined with memory year — NOT past
+                    notes.append(
+                        f"This message includes \"{raw_date}\" — combined with existing memory year "
+                        f"({mem_year_match.group(1)}) → \"{effective_date}\" which is future. "
+                        f"Patch occasion.datePreference=\"{effective_date}\"."
+                    )
+                else:
+                    notes.append(
+                        f"This message includes \"{raw_date}\" but that is PAST — "
+                        f"do NOT put it in datePreference. Stay and ask for a FUTURE month/year."
+                    )
             elif raw_date:
-                notes.append(
-                    f"This message includes future timing → patch occasion.datePreference=\"{raw_date}\"."
-                )
+                if effective_date != raw_date:
+                    notes.append(
+                        f"This message includes \"{raw_date}\" — combined with memory year "
+                        f"({mem_year_match.group(1)}) → patch occasion.datePreference=\"{effective_date}\"."
+                    )
+                else:
+                    notes.append(
+                        f"This message includes future timing → patch occasion.datePreference=\"{raw_date}\"."
+                    )
             if season_in_msg:
                 notes.append(f"Season named → patch seasonPreference=\"{season_in_msg}\".")
 

@@ -111,12 +111,91 @@ def is_past_date(date_preference: str) -> bool:
     return False
 
 
+def _resolve_relative_timing(message: str) -> str:
+    """
+    Replace relative year/month references with concrete computed values
+    BEFORE the main regex runs, so agents get an explicit year to patch.
+
+    Handles:
+      "next year"          → appends " {current_year + 1}"
+      "coming year"        → appends " {current_year + 1}"
+      "this year"          → appends " {current_year}"
+      "next December"      → "December {year}" (correct year from today)
+      "December next year" → "December {next_year}"   ← NEW
+      "June this year"     → "June {this_year}"        ← NEW
+    Only appends year when no explicit 4-digit year already appears.
+    """
+    from datetime import date
+    today      = date.today()
+    this_year  = today.year
+    next_year  = today.year + 1
+    msg_l      = message.lower()
+
+    already_has_year = bool(re.search(r"\b20\d{2}\b", message))
+
+    # Pattern: "[month] next year" / "[month] this year"
+    # Must check BEFORE the bare "next year" append so we get precise month+year
+    month_rel_year = re.search(
+        r"\b(january|february|march|april|may|june"
+        r"|july|august|september|october|november|december)"
+        r"\s+(?:of\s+)?(next year|this year|coming year|the next year|current year)\b",
+        msg_l,
+    )
+    if month_rel_year:
+        month_name = month_rel_year.group(1)
+        rel_phrase = month_rel_year.group(2)
+        resolved_year = next_year if "next" in rel_phrase or "coming" in rel_phrase else this_year
+        pattern = rf"\b{re.escape(month_name)}\s+(?:of\s+)?{re.escape(rel_phrase)}\b"
+        return re.sub(
+            pattern,
+            f"{month_name.title()} {resolved_year}",
+            message,
+            flags=re.IGNORECASE,
+        )
+
+    if not already_has_year:
+        # "next year" / "coming year" / "year after"
+        if re.search(r"\b(next year|coming year|year after|the next year)\b", msg_l):
+            return message + f" {next_year}"
+
+        # "this year" / "current year"
+        if re.search(r"\b(this year|current year|same year)\b", msg_l):
+            return message + f" {this_year}"
+
+    # "next [month]" — resolve correct year even if an unrelated year exists
+    next_month_match = re.search(
+        r"\bnext\s+(january|february|march|april|may|june"
+        r"|july|august|september|october|november|december)\b",
+        msg_l,
+    )
+    if next_month_match:
+        month_name = next_month_match.group(1)
+        month_num  = _MONTH_INDEX[month_name]
+        resolved_year = this_year if month_num > today.month else next_year
+        pattern = rf"\bnext\s+{re.escape(month_name)}\b"
+        return re.sub(
+            pattern,
+            f"{month_name.title()} {resolved_year}",
+            message,
+            flags=re.IGNORECASE,
+        )
+
+    return message
+
+
 def extract_month_or_season(message: str) -> dict:
     """
     Return {datePreference?} and/or {seasonPreference?} only for concrete timing.
     Vague phrases like 'cold weather' are ignored for completion.
     Named seasons only when explicitly said as a season — not inferred from month.
+
+    Relative phrases resolved before extraction:
+      "next year"     → current_year + 1
+      "this year"     → current_year
+      "next December" → December <resolved_year>
     """
+    # Pre-process relative timing first
+    resolved = _resolve_relative_timing(message)
     msg_l = message.lower()
     result: dict = {}
 
@@ -124,16 +203,21 @@ def extract_month_or_season(message: str) -> dict:
         r"(early\s+|late\s+|mid\s+)?"
         r"(january|february|march|april|may|june|july|august|september|october|november|december)"
         r"(\s+\d{4})?",
-        message,
+        resolved,
         re.IGNORECASE,
     )
     if date_match:
         result["datePreference"] = date_match.group(0).strip().title()
 
+    # Year-only fallback (e.g. message was just "next year" → resolved to "next year 2027")
+    if not result.get("datePreference"):
+        year_match = re.search(r"\b(202[6-9]|20[3-9]\d)\b", resolved)
+        if year_match:
+            result["datePreference"] = year_match.group(1)
+
     # Only explicit season words — do NOT invent Spring from March
     for season in VALID_SEASONS:
         if re.search(rf"\b{season}\b", msg_l) and season not in MONTHS:
-            # avoid matching "fall" inside other words; \b handles most
             result["seasonPreference"] = season.title()
             break
 

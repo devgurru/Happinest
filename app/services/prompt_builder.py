@@ -148,6 +148,7 @@ def build_conversation_turn_prompt(
     user_message: str,
     *,
     intent: dict | None = None,
+    image_context: str = "",  # vision model's note — injected into user message
 ) -> list[dict]:
     """Call 2 — planner reply + memoryPatch using current + intent-driven stage rules."""
     template = _load_template("conversation_turn")
@@ -184,17 +185,114 @@ def build_conversation_turn_prompt(
         client_names=_client_names(memory),
         last_planner_reply=last_planner,
         history=history,
+        # Image turn rules — empty string when no images (template renders nothing)
+        image_turn_rules=_image_turn_rules_block(image_context),
     )
 
     json_reminder = "[Respond ONLY with one valid JSON object. No markdown.]\n\n"
     early_reminder = _early_signals_reminder(stage, memory)
-    user_content = f"{early_reminder}\n\n{json_reminder}{user_message}".strip() if early_reminder else f"{json_reminder}{user_message}"
+    is_repeat = bool(image_context and "more" in image_context.lower())
+    visual_hint = _visual_signals_hint(memory, image_context)
+
+    parts = []
+    if early_reminder:
+        parts.append(early_reminder)
+    if visual_hint:
+        parts.append(visual_hint)
+    parts.append(json_reminder + (user_message or "(user sent images without text)"))
+    user_content = "\n\n".join(parts)
 
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
         {"role": "assistant", "content": "{"},
     ]
+
+
+def _visual_signals_hint(memory: dict, image_context: str = "") -> str:
+    """
+    Build extracted-signal data block for the user message.
+    Pure data only — behavioral rules live in conversation_turn.txt via $image_turn_rules.
+    Only fires when visualSignals is populated.
+    """
+    early = memory.get("earlySignals") or {}
+    vs = early.get("visualSignals") or {}
+    if not vs and not image_context:
+        return ""
+
+    seen_lines = []
+    if vs.get("summary"):
+        seen_lines.append(f"What was seen: {vs['summary']}")
+    if vs.get("colorPalette"):
+        seen_lines.append(f"Color palette: {', '.join(vs['colorPalette'])}")
+    if vs.get("venueType"):
+        seen_lines.append(f"Venue type: {vs['venueType']}")
+    if vs.get("settingType"):
+        seen_lines.append(f"Setting: {vs['settingType']}")
+    if vs.get("styleKeywords"):
+        seen_lines.append(f"Style keywords: {', '.join(vs['styleKeywords'])}")
+    if vs.get("identifiedLocation"):
+        seen_lines.append(f"Recognised location: {vs['identifiedLocation']} — reference this by name")
+    if vs.get("occasionCues"):
+        seen_lines.append(f"Event/occasion cues: {', '.join(vs['occasionCues'])}")
+    vibe_hints = early.get("vibe") or []
+    if vibe_hints:
+        seen_lines.append(f"Vibe signals from images: {', '.join(vibe_hints)}")
+
+    if not seen_lines:
+        return ""
+
+    return (
+        "[EXTRACTED IMAGE DATA — use this to inform your reply and memoryPatch]\n"
+        + "\n".join(f"  • {l}" for l in seen_lines)
+    )
+
+
+def _image_turn_rules_block(image_context: str) -> str:
+    """
+    Returns the behavioral rules for image turns injected via $image_turn_rules.
+    Empty string when no images so the template section disappears entirely.
+
+    Detects repeat uploads (image_context mentions 'more images' / 'more inspiration')
+    and adds an extra rule telling the LLM to acknowledge both old and new signals
+    and ask what the user wants to keep.
+    """
+    if not image_context:
+        return ""  # No images this turn — section disappears from prompt
+
+    # Detect repeat upload from the planner note wording
+    is_repeat = any(
+        phrase in image_context.lower()
+        for phrase in ("more inspiration", "more images", "shared more", "merged", "combined")
+    )
+
+    repeat_rule = ""
+    if is_repeat:
+        repeat_rule = """
+7. REPEAT UPLOAD — the user already shared images earlier this session.
+   • Your reply MUST acknowledge BOTH the previous and new images together.
+   • Reference what was seen before AND what's new (e.g. "Earlier you showed a royal red-gold banquet style, and these new images bring in a garden outdoor feel...").
+   • Ask ONE focused question: what's different about these, or are they exploring an alternative direction?
+   • Confirm they want to KEEP both sets of signals, or replace with just the new ones.
+   • Do NOT act as if you're seeing images for the first time."""
+
+    return f"""\
+## IMAGE TURN RULES (images were uploaded this turn — follow these strictly)
+
+The couple shared inspiration images. Your plannerReply MUST:
+1. Open with a SPECIFIC, WARM acknowledgement — name what you actually see (colors, venue style, setting).
+   GOOD: "That opulent red-and-gold indoor stage with the floral archway is stunning!"
+   BAD:  "I see you've shared some images!" / "I notice you uploaded some photos"
+2. Use the visual signals to GUIDE your stage question — weave the question naturally from what you saw.
+   Example: "Love that grand banquet hall energy — is this kind of indoor palace setting what you're dreaming of? And which city are you picturing for it?"
+3. If a real location/landmark was recognised in the images — mention it by name in a warm, confirming way.
+4. If stage still needs place + date (S2) — use venue/setting cues to make the question feel guided, NOT cold.
+5. Keep acknowledgement to 1–2 sentences, then ask ONE clear stage question.
+6. Do NOT write two separate sections. Write ONE cohesive reply.{repeat_rule}
+
+Vision model's image summary (use as inspiration, not verbatim): "{image_context}"
+""".strip()
+
 
 
 def _with_json_prefill(content: str) -> list[dict]:

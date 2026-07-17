@@ -71,6 +71,17 @@ DEFAULT_PLANNER_MEMORY: dict = {
         "budget": {},
         "vendors": {},
         "acknowledged": False,
+        # Image-derived signals — populated by vision analysis, consumed by stage rules
+        "visualSignals": {
+            "colorPalette": [],        # e.g. ["blush pink", "gold", "ivory"]
+            "venueType": "",           # e.g. "garden", "banquet hall", "beach", "palace"
+            "settingType": "",         # e.g. "indoor", "outdoor", "destination"
+            "styleKeywords": [],       # e.g. ["floral", "minimalist", "royal"]
+            "identifiedLocation": "",  # e.g. "Taj Lake Palace, Udaipur" if recognisable
+            "occasionCues": [],        # e.g. ["mehendi", "sangeet", "reception"]
+            "imageCount": 0,           # how many images analysed
+            "summary": "",             # one-line AI summary of all images
+        },
     },
     "committedSelections": {
         "personality": [],
