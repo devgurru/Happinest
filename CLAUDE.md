@@ -14,6 +14,8 @@ Stack: FastAPI (async) · SQLAlchemy 2.0 async + asyncpg · PostgreSQL + **pgvec
 
 Run everything from the **repository root** (the `app/` package lives here), with the virtualenv active.
 
+> **Database setup** — native Postgres or Docker, the pgvector extension, seeding, and troubleshooting: see [docs/DB_SETUP.md](docs/DB_SETUP.md).
+
 ```bash
 # One-time setup
 python -m venv venv && source venv/bin/activate
