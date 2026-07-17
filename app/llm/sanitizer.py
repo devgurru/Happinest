@@ -5,7 +5,7 @@ Fixes invalid stage ids, decision types, and memory patch schema.
 from __future__ import annotations
 
 from app.domain.enums import StageDecisionType, StageId
-from app.services.text_extract import sanitize_timing_fields
+from app.domain.text_extract import sanitize_timing_fields
 
 VALID_STAGE_IDS = {s.value for s in StageId}
 VALID_DECISION_TYPES = {d.value for d in StageDecisionType}

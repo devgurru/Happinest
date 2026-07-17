@@ -4,7 +4,7 @@ These are the source of truth for all stage, event, and decision vocabulary.
 Backend enforces these. No other code should hardcode stage/event strings.
 """
 from enum import Enum
-from app.config import settings
+from app.core.config import settings
 
 # ─── Stage IDs ────────────────────────────────────────────────────────────────
 

@@ -6,8 +6,12 @@ import string
 from pathlib import Path
 
 from app.domain.chip_pools import format_chip_pool_for_prompt
-from app.services.intent import TurnIntent
-from app.services.stage_policy import StagePolicy
+from app.domain.intent import TurnIntent
+from app.domain.stages import (
+    get_stage_gap_guide,
+    get_stage_prompt_context,
+    get_stage_rules_for_intent,
+)
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -92,7 +96,7 @@ def build_conversation_turn_prompt(
 ) -> list[dict]:
     """Call 2 — planner reply + memoryPatch using current + intent-driven stage rules."""
     template = _load_template("conversation_turn")
-    stage_ctx = StagePolicy.get_stage_prompt_context(stage)
+    stage_ctx = get_stage_prompt_context(stage)
     chip_pool_str = format_chip_pool_for_prompt(stage)
     history, last_planner = _history_and_last_reply(
         recent_messages, limit=8 if stage == "s2_basics" else 12
@@ -100,7 +104,7 @@ def build_conversation_turn_prompt(
 
     intent = intent or TurnIntent.default()
     target_sections = [s for s in intent.target_sections if isinstance(s, str)]
-    stage_rules = StagePolicy.get_stage_rules_for_intent(
+    stage_rules = get_stage_rules_for_intent(
         stage,
         target_sections,
         intent_type=intent.intent_type.value,
@@ -112,7 +116,7 @@ def build_conversation_turn_prompt(
         stage_goal=stage_ctx.get("goal", "Gather information for this stage."),
         memory_patch_hint=stage_ctx.get("memoryPatchHint", "Patch only fields for this stage."),
         advance_condition=stage_ctx.get("advanceCondition", "When enough information is captured."),
-        stage_gaps=StagePolicy.get_stage_gap_guide(stage, memory, user_message),
+        stage_gaps=get_stage_gap_guide(stage, memory, user_message),
         stage_rules=stage_rules,
         intent_summary=intent.summary or "Normal answer for current stage",
         intent_type=intent.intent_type.value,

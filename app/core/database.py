@@ -4,7 +4,7 @@ Base is imported from app.models.base — single source of truth.
 """
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
+from app.core.config import settings
 from app.models.base import Base  # noqa: F401 — re-exported for convenience
 
 engine = create_async_engine(

@@ -14,7 +14,7 @@ from app.domain.enums import StageDecisionType, StageId
 
 def _s2_asks_place_when_place_known(reply_lower: str, memory: dict) -> bool:
     """True if model re-asks location while place is already saved."""
-    from app.services.text_extract import get_occasion_state
+    from app.domain.text_extract import get_occasion_state
 
     state = get_occasion_state(memory)
     if not state["has_place"]:
@@ -53,7 +53,7 @@ def _stuck_on_previous_stage(reply_lower: str, from_stage: str, to_stage: str) -
 def _fallback_question(stage: str, memory: dict) -> str:
     """Last-resort short question only when the agent returned no usable reply."""
     if stage == StageId.S2_BASICS.value:
-        from app.services.text_extract import get_occasion_state
+        from app.domain.text_extract import get_occasion_state
         state = get_occasion_state(memory)
         if state["has_place"] and not state["has_time"]:
             return f"{state['place']} is noted — roughly which month or season?"

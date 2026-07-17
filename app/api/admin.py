@@ -2,8 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.database.database import get_db
+from app.core.config import settings
+from app.core.database import get_db
 from app.seeds.seed_runner import run as run_seed
 from app.services.embedding_service import generate_and_store_embeddings
 

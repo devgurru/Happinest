@@ -343,11 +343,16 @@ def filter_tags(tags: list) -> list[str]:
     return out
 
 
+def chips_mentioned_in_message(message: str, pool: list[str]) -> list[str]:
+    """Find chip-pool labels referenced in free text (case-insensitive)."""
+    message_l = message.lower()
+    return [chip for chip in pool if chip.lower() in message_l]
+
+
 def extract_vibe_label(message: str) -> str | None:
     """Map free text to a canonical vibe pool label when possible."""
     from app.domain.chip_pools import get_chip_pool
     from app.domain.enums import StageId
-    from app.services.ui_hints import chips_mentioned_in_message
 
     pool = get_chip_pool(StageId.S4_VIBE.value)
     mentioned = chips_mentioned_in_message(message, pool)

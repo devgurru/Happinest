@@ -196,13 +196,3 @@ def build_ui_suggestions(
     }.get(display_stage, "chip")
 
     return [{"label": chip, "category": category} for chip in selected[:6]]
-
-
-def chips_mentioned_in_message(message: str, pool: list[str]) -> list[str]:
-    """Find chip-pool labels referenced in free text (case-insensitive)."""
-    message_l = message.lower()
-    found: list[str] = []
-    for chip in pool:
-        if chip.lower() in message_l:
-            found.append(chip)
-    return found

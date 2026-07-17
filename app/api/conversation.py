@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.database import get_db
+from app.core.database import get_db
 from app.domain.enums import EventType
 from app.schemas.planner import (
     PlannerNotesView, PlannerResponse, StageDecisionSchema, TurnRequest,

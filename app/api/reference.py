@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.database import get_db
+from app.core.database import get_db
 from app.models.event_site import EventSite
 from app.models.vendor import Vendor
 from app.schemas.planner import EventSiteOut, VendorOut

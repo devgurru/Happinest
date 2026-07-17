@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
+from app.core.config import settings
 from app.models.event_site import EventSite
 from app.models.vendor import Vendor
 from app.seeds.event_sites_seed import EVENT_SITES

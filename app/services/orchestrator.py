@@ -24,7 +24,7 @@ from app.domain.memory_schema import (
 )
 from app.models.generated_artifact import GeneratedArtifact
 from app.models.session_event_site_recommendation import SessionEventSiteRecommendation
-from app.services.ai_gateway import AIGatewayError, call_llm
+from app.llm.gateway import AIGatewayError, call_llm
 from app.services.correction_policy import (
     apply_stale_artifact_markers,
     detect_upstream_correction,
@@ -32,21 +32,25 @@ from app.services.correction_policy import (
 )
 from app.services.embedding_service import find_matching_event_sites
 from app.services.memory_service import MemoryService
-from app.services.observability import log_ai_turn
-from app.services.prompt_builder import (
+from app.core.observability import log_ai_turn
+from app.llm.prompt_builder import (
     build_brief_synthesis_prompt,
     build_conversation_turn_prompt,
     build_final_summary_prompt,
     build_turn_intent_prompt,
 )
-from app.services.response_validator import validate_ai_response, validate_synthesis_response
-from app.services.intent import TurnIntent
+from app.llm.validator import validate_ai_response, validate_synthesis_response
+from app.domain.intent import TurnIntent
 from app.services.session_service import SessionService
-from app.services.stage_policy import StagePolicy
+from app.domain.stages import (
+    infer_synthesis_type,
+    is_stage_complete,
+    resolve_final_decision_with_memory,
+)
 from app.services.planner_reply_policy import align_planner_reply
-from app.services.response_sanitizer import sanitize_ai_response
+from app.llm.sanitizer import sanitize_ai_response
 from app.services.ui_hints import build_ui_suggestions
-from app.config import settings
+from app.core.config import settings
 
 
 def _make_error_response(
@@ -800,7 +804,7 @@ async def process_conversation_turn(
         )
         stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
     else:
-        final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
+        final_decision_type, final_stage, _reason = resolve_final_decision_with_memory(
             ai_decision_type, ai_to_stage, stage, memory,
             open_questions=open_questions,
         )
@@ -835,8 +839,8 @@ async def process_conversation_turn(
         stage == StageId.S4_VIBE.value
         and final_stage == StageId.S5_BRIEF.value
         and not correction
-        and StagePolicy.is_stage_complete(StageId.S3_PERSONALITY.value, memory)
-        and StagePolicy.is_stage_complete(StageId.S4_VIBE.value, memory)
+        and is_stage_complete(StageId.S3_PERSONALITY.value, memory)
+        and is_stage_complete(StageId.S4_VIBE.value, memory)
     ):
         brief_result = await _execute_synthesis(
             db, session, session_id, SynthesisType.BRIEF.value,
@@ -940,7 +944,7 @@ async def process_conversation_turn(
     ]
 
     # 12. Planner reply — backend aligns copy to FINAL stage (chips already do this)
-    # Root cause of S2-text-on-S3: LLM is prompted on current stage; StagePolicy advances after.
+    # Root cause of S2-text-on-S3: LLM is prompted on current stage; stage policy advances after.
     correction_ack = ""
     if correction:
         correction_ack = _summarize_correction_for_reply(correction, memory_before, memory)
@@ -1031,7 +1035,7 @@ async def process_synthesis_request(
             )
             memory = sync.memory_json
 
-    synthesis_type = synthesis_type or StagePolicy.infer_synthesis_type(stage, memory)
+    synthesis_type = synthesis_type or infer_synthesis_type(stage, memory)
     if not synthesis_type:
         from app.domain.memory_schema import resolve_primary_vibe
         if stage == StageId.S4_VIBE.value and not resolve_primary_vibe(memory):

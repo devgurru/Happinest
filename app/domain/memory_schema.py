@@ -95,7 +95,7 @@ def resolve_primary_vibe(memory: dict) -> str:
     """Primary vibe from canonical memory or committed chips — pool labels only."""
     from app.domain.chip_pools import get_chip_pool
     from app.domain.enums import StageId
-    from app.services.text_extract import is_valid_primary_vibe, normalize_primary_vibe
+    from app.domain.text_extract import is_valid_primary_vibe, normalize_primary_vibe
 
     vibe = memory.get("vibe") or {}
     primary = (vibe.get("primaryVibe") or "").strip()
@@ -120,7 +120,7 @@ def build_selected_chips(memory: dict) -> dict:
     Committed chip selections derived from canonical memory.
     Used for UI restore after page reload.
     """
-    from app.services.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
+    from app.domain.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
 
     personality = memory.get("personality", {})
     vibe = memory.get("vibe", {})
@@ -166,7 +166,7 @@ def build_selected_chips(memory: dict) -> dict:
 
 def update_committed_selections(memory: dict, patch: dict) -> dict:
     """Merge patch into committedSelections for UI restore."""
-    from app.services.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
+    from app.domain.text_extract import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
 
     selections = copy.deepcopy(memory.get("committedSelections", {}))
     if "personality" in patch:
