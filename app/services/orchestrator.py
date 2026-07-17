@@ -32,7 +32,7 @@ from app.services.correction_policy import (
 )
 from app.services.embedding_service import find_matching_event_sites
 from app.services.memory_service import MemoryService
-from app.core.observability import log_ai_turn
+from app.core.observability import log_ai_turn, log_intent_shadow
 from app.llm.prompt_builder import (
     build_brief_synthesis_prompt,
     build_conversation_turn_prompt,
@@ -41,6 +41,7 @@ from app.llm.prompt_builder import (
 )
 from app.llm.validator import validate_ai_response, validate_synthesis_response
 from app.domain.intent import TurnIntent
+from app.services.intent_resolver import resolve_intent
 from app.services.session_service import SessionService
 from app.domain.stages import (
     infer_synthesis_type,
@@ -639,6 +640,21 @@ async def process_conversation_turn(
         turn_intent = TurnIntent.from_llm(intent_raw)
     except AIGatewayError:
         # Fall through with default normal intent — Call 2 still runs
+        pass
+
+    # ── Shadow mode: local resolver runs alongside Call 1; LLM stays authoritative.
+    # We only log agreement here — nothing downstream uses local_intent yet.
+    try:
+        local_intent = resolve_intent(stage, memory, user_message)
+        log_intent_shadow(
+            request_id, session_id, stage,
+            llm_intent=turn_intent.intent_type.value,
+            local_intent=local_intent.intent_type.value,
+            llm_sections=turn_intent.target_sections,
+            local_sections=local_intent.target_sections,
+        )
+    except Exception:
+        # Shadow logging must never affect the turn
         pass
 
     # ── Call 2: conversation turn with intent-aware stage rules ───────────
