@@ -10,3 +10,5 @@ python-dotenv>=1.0.0
 pgvector>=0.3.0
 numpy>=1.26.0
 python-multipart>=0.0.9   # Required for Form() and UploadFile (multipart/form-data)
+langgraph>=0.2.0
+langchain-core>=0.3.0

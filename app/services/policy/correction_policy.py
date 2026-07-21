@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 
 from app.domain.enums import StageDecisionType, StageId
-from app.services.memory_service import compute_stale_sections
+from app.services.session.memory_service import compute_stale_sections
 
 _SECTION_TO_STAGE: dict[str, str] = {
     "identity": StageId.S1_NAMES.value,

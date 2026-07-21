@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     # Vision model — used for image analysis (multimodal)
-    GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 
     # Embeddings — keep local Ollama by default (pgvector dims = nomic-embed-text)
     # Direction matching depends on this; do not switch casually.

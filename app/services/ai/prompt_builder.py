@@ -6,9 +6,9 @@ import string
 from pathlib import Path
 
 from app.domain.chip_pools import format_chip_pool_for_prompt
-from app.services.stage_policy import StagePolicy
+from app.services.policy.stage_policy import StagePolicy
 
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 _STAGE_MEMORY_KEYS: dict[str, list[str]] = {
     "s2_basics": ["identity", "occasion", "earlySignals"],
@@ -128,9 +128,15 @@ def build_turn_intent_prompt(
     user_message: str,
 ) -> list[dict]:
     """Call 1 — classify intent / target sections (no planner copy)."""
+    from datetime import date as _date
     template = _load_template("turn_intent")
+    from app.services.policy.stage_policy import STAGE_CONFIG
+    stage_config = STAGE_CONFIG.get(stage, {})
+    stage_goal = stage_config.get("goal", "")
     content = template.safe_substitute(
         stage=stage,
+        stage_goal=stage_goal,
+        current_date=_date.today().strftime("%B %Y"),
         client_names=_client_names(memory),
         memory_json=json.dumps(_slim_memory(memory, stage), indent=2),
         user_message=user_message,
@@ -169,8 +175,10 @@ def build_conversation_turn_prompt(
         intent_summary=str(intent.get("summary") or ""),
     )
 
+    from datetime import date as _date
     system_content = template.safe_substitute(
         stage=stage,
+        current_date=_date.today().strftime("%B %Y"),
         stage_goal=stage_ctx.get("goal", "Gather information for this stage."),
         memory_patch_hint=stage_ctx.get("memoryPatchHint", "Patch only fields for this stage."),
         advance_condition=stage_ctx.get("advanceCondition", "When enough information is captured."),
@@ -280,13 +288,16 @@ def _image_turn_rules_block(image_context: str) -> str:
 ## IMAGE TURN RULES (images were uploaded this turn — follow these strictly)
 
 The couple shared inspiration images. Your plannerReply MUST:
+0. CRITICAL: NEVER claim "I didn't receive an image" or "we didn't discuss images". An image WAS received and analyzed this turn!
 1. Open with a SPECIFIC, WARM acknowledgement — name what you actually see (colors, venue style, setting).
    GOOD: "That opulent red-and-gold indoor stage with the floral archway is stunning!"
-   BAD:  "I see you've shared some images!" / "I notice you uploaded some photos"
+   BAD:  "I see you've shared some images!" / "I notice you uploaded some photos" / "I didn't receive any image"
 2. Use the visual signals to GUIDE your stage question — weave the question naturally from what you saw.
-   Example: "Love that grand banquet hall energy — is this kind of indoor palace setting what you're dreaming of? And which city are you picturing for it?"
-3. If a real location/landmark was recognised in the images — mention it by name in a warm, confirming way.
-4. If stage still needs place + date (S2) — use venue/setting cues to make the question feel guided, NOT cold.
+3. CRITICAL IF ADVANCING TO S3 PERSONALITY THIS TURN:
+   Do NOT ask about venue setting, theme confirmation, or place/date! You ALREADY have place & date.
+   Instead, acknowledge the image and place/date, and ask about the COUPLE'S PERSONALITY / VIBE (e.g. "To build the atmosphere around you two, how would you describe your style as a couple? Are you foodies, classic traditionalists, or love a big festive gathering?").
+4. If stage still needs place + date (S2 STAY) — ask for missing city/date using venue/setting cues.
+   Example (S2 STAY): "Love that grand banquet hall energy! Which city and what time of year are you picturing for your wedding?"
 5. Keep acknowledgement to 1–2 sentences, then ask ONE clear stage question.
 6. Do NOT write two separate sections. Write ONE cohesive reply.{repeat_rule}
 

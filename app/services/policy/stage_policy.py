@@ -280,12 +280,12 @@ REJECT (do not patch; stay or request_clarification):
 CRITICAL for stay vs advance:
 - If message has city + future month (e.g. "Goa, December 2026") → patch BOTH place and
   datePreference, stageDecision.type = "advance", ask personality (s3) next.
+  WHEN ADVANCING TO S3: Your plannerReply MUST ask about the COUPLE (personality / style / relationship / how they met), NOT venue setting, theme confirmation, OR vibe (e.g., intimate vs. big & festive). NEVER ask "what kind of wedding are you envisioning - intimate, big and festive" when advancing to S3 (that is s4_vibe). Ask strictly about the couple's personality & story.
 - If message has city + PAST month/year (e.g. "Goa, March 2026" when today is later) →
   patch place only, do NOT put the past date in datePreference, stay, warmly explain
   that date seems to have passed, ask for a future month/year. Do NOT ask personality.
 - If only place → stay, ask for month/season only.
 - If only timing → stay, ask for place only.
-- NEVER ask about "what you both love / relationship unique" while still on s2_basics.
 
 EXAMPLE with early signals:
 Input: "Goa, December — we're foodies and love big festive weddings"
@@ -640,11 +640,11 @@ class StagePolicy:
             return False
 
         if stage_id == StageId.S2_BASICS:
-            from app.services.text_extract import get_occasion_state
+            from app.utils.validators import get_occasion_state
             return get_occasion_state(memory)["is_complete"]
 
         if stage_id == StageId.S3_PERSONALITY:
-            from app.services.text_extract import filter_tags
+            from app.utils.validators import filter_tags
             p = memory.get("personality", {})
             tags = filter_tags(p.get("tags") or [])
             # Hard rule: culturalSignals alone (often from occasion paste) never unlock S3.
@@ -705,85 +705,19 @@ class StagePolicy:
         msg = (user_message or "").strip()
 
         if stage == StageId.S2_BASICS.value:
-            from app.services.text_extract import (
-                extract_month_or_season,
-                extract_place_from_message,
-                get_occasion_state,
-                is_past_date,
-                _resolve_relative_timing,
-            )
+            from app.utils.validators import get_occasion_state, is_past_date
             state = get_occasion_state(memory)
-            place_in_msg = extract_place_from_message(msg) if msg else None
-            timing_in_msg = extract_month_or_season(msg) if msg else {}
-            raw_date = (timing_in_msg.get("datePreference") or "").strip()
-            season_in_msg = (timing_in_msg.get("seasonPreference") or "").strip()
-
-            # ── Key fix: if month-only extracted but memory already has a year,
-            # combine them before checking past/future.
-            # e.g. raw_date="June", memory has datePreference="2027"
-            # → check "June 2027" (future) not bare "June" (past this year).
-            import re as _re
-            effective_date = raw_date
-            mem_occasion = memory.get("occasion") or {}
-            mem_date = (mem_occasion.get("datePreference") or "").strip()
-            mem_year_match = _re.search(r"\b(20\d{2})\b", mem_date) if mem_date else None
-            if raw_date and mem_year_match and not _re.search(r"\b\d{4}\b", raw_date):
-                # raw_date is month-only, memory has an explicit year
-                effective_date = f"{raw_date} {mem_year_match.group(1)}"
-
-            date_past = bool(effective_date and is_past_date(effective_date))
-
-            will_have_place = state["has_place"] or bool(place_in_msg)
-            will_have_time = state["has_time"] or bool(season_in_msg) or (
-                bool(raw_date) and not date_past
-            )
 
             notes = [f"Today: {today}. Next year = {next_year}."]
+            notes.append(
+                "You MUST identify place (city/region) and timing (future month+year or named season) "
+                "from the user's message. Relative phrases like 'next year' resolve to the concrete year. "
+                "NEVER save past dates to datePreference."
+            )
 
-            # Relative timing — tell agent the resolved concrete value
-            msg_l = msg.lower()
-            if _re.search(r"\b(next year|coming year|year after)\b", msg_l) and not _re.search(r"\b20\d{2}\b", msg):
+            if state["has_place"] and state["has_time"]:
                 notes.append(
-                    f"Message says 'next year' — resolved to {next_year}. "
-                    f"Patch occasion.datePreference=\"{next_year}\" (the concrete year, not the phrase)."
-                )
-            elif _re.search(r"\b(this year|current year)\b", msg_l) and not _re.search(r"\b20\d{2}\b", msg):
-                notes.append(
-                    f"Message says 'this year' — resolved to {this_year}. "
-                    f"Patch occasion.datePreference=\"{this_year}\"."
-                )
-
-            if place_in_msg:
-                notes.append(f"This message includes place → patch occasion.place=\"{place_in_msg}\".")
-            if raw_date and date_past:
-                if effective_date != raw_date:
-                    # Was month-only, combined with memory year — NOT past
-                    notes.append(
-                        f"This message includes \"{raw_date}\" — combined with existing memory year "
-                        f"({mem_year_match.group(1)}) → \"{effective_date}\" which is future. "
-                        f"Patch occasion.datePreference=\"{effective_date}\"."
-                    )
-                else:
-                    notes.append(
-                        f"This message includes \"{raw_date}\" but that is PAST — "
-                        f"do NOT put it in datePreference. Stay and ask for a FUTURE month/year."
-                    )
-            elif raw_date:
-                if effective_date != raw_date:
-                    notes.append(
-                        f"This message includes \"{raw_date}\" — combined with memory year "
-                        f"({mem_year_match.group(1)}) → patch occasion.datePreference=\"{effective_date}\"."
-                    )
-                else:
-                    notes.append(
-                        f"This message includes future timing → patch occasion.datePreference=\"{raw_date}\"."
-                    )
-            if season_in_msg:
-                notes.append(f"Season named → patch seasonPreference=\"{season_in_msg}\".")
-
-            if will_have_place and will_have_time:
-                notes.append(
-                    "After this patch S2 will be COMPLETE → stageDecision.type=advance to s3_personality. "
+                    "S2 is COMPLETE → stageDecision.type=advance to s3_personality. "
                     "If your memoryPatch contains earlySignals (personality/vibe/events/budget), "
                     "follow the ADVANCE WITH EARLY SIGNALS rule: acknowledge place+date, "
                     "reference the early signals, ask for confirmation. "
@@ -792,9 +726,9 @@ class StagePolicy:
                 return " ".join(notes)
 
             missing = []
-            if not will_have_place:
+            if not state["has_place"]:
                 missing.append("place (city/region)")
-            if not will_have_time:
+            if not state["has_time"]:
                 missing.append("future month+year (e.g. December 2026) or named season")
             notes.append(
                 f"S2 still incomplete — need: {', '.join(missing)}. "
@@ -804,7 +738,7 @@ class StagePolicy:
             return " ".join(notes)
 
         if stage == StageId.S3_PERSONALITY.value:
-            from app.services.text_extract import filter_tags
+            from app.utils.validators import filter_tags
             tags = filter_tags((memory.get("personality") or {}).get("tags") or [])
             early_p = (memory.get("earlySignals") or {}).get("personality") or []
             

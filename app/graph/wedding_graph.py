@@ -1,57 +1,67 @@
 """
-Orchestrator — the core turn-processing pipeline.
-Backend controls all decisions. AI supports.
+LangGraph Wedding AI Orchestrator — Central State Machine for Stage Management and Processing.
 
-Flow for conversation_turn:
-  1. Load session + memory + history
-  2. Call 1 — intent (sections / gibberish / correction)
-  3. Call 2 — conversation turn with matching stage rules
-  4. Validate → apply memoryPatch → stage policy → reply
+This module replaces the legacy monolithic `orchestrator.py` with a LangGraph state machine.
+State flow:
+  load_session -> analyze_images -> classify_intent -> conversation_turn -> sanitize_validate -> apply_memory -> resolve_stage -> assemble_response
 """
+
+from __future__ import annotations
+
 import copy
 import re
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from langgraph.graph import END, StateGraph
 
+from app.config import settings
 from app.domain.enums import (
     ArtifactStatus, ArtifactType, EventType, MessageRole, MessageType,
     ResponseSource, StageDecisionType, StageId, SynthesisType,
 )
 from app.domain.memory_schema import (
-    build_planner_notes_view, build_selected_chips,
+    build_planner_notes_view, build_selected_chips, resolve_primary_vibe,
 )
+from app.graph.state import WeddingState
+from app.models.event_site import EventSite
 from app.models.generated_artifact import GeneratedArtifact
 from app.models.session_event_site_recommendation import SessionEventSiteRecommendation
-from app.services.ai_gateway import AIGatewayError, call_llm
-from app.services.correction_policy import (
-    apply_stale_artifact_markers,
-    detect_upstream_correction,
-    resolve_correction_stage_decision,
-)
-from app.services.embedding_service import find_matching_event_sites
-from app.services.image_service import analyse_images
-from app.services.memory_service import MemoryService
-from app.services.observability import log_ai_turn
-from app.services.prompt_builder import (
+
+from app.services.ai.ai_gateway import AIGatewayError, call_llm
+from app.services.ai.embedding_service import find_matching_event_sites
+from app.services.ai.image_service import analyse_images
+from app.services.ai.prompt_builder import (
     build_brief_synthesis_prompt,
     build_conversation_turn_prompt,
     build_final_summary_prompt,
     build_turn_intent_prompt,
 )
-from app.services.response_validator import validate_ai_response, validate_synthesis_response
-from app.services.session_service import SessionService
-from app.services.stage_policy import StagePolicy
-from app.services.planner_reply_policy import align_planner_reply
-from app.services.response_sanitizer import sanitize_ai_response
-from app.services.ui_hints import build_ui_suggestions
-from app.config import settings
+from app.services.policy.correction_policy import (
+    apply_stale_artifact_markers,
+    detect_upstream_correction,
+    resolve_correction_stage_decision,
+)
+from app.services.policy.planner_reply_policy import align_planner_reply
+from app.services.policy.response_sanitizer import sanitize_ai_response
+from app.services.policy.response_validator import validate_ai_response, validate_synthesis_response
+from app.services.policy.stage_policy import StagePolicy
+from app.services.session.memory_service import MemoryService
+from app.services.session.session_service import SessionService
+from app.services.ui.observability import log_ai_turn
+from app.services.ui.ui_hints import build_ui_suggestions
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper Functions
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _make_error_response(
-    request_id: uuid.UUID,
-    session_id: uuid.UUID,
+    request_id: uuid.UUID | str,
+    session_id: uuid.UUID | str,
     stage: str,
     memory: dict,
     error_code: str,
@@ -76,8 +86,8 @@ def _make_error_response(
 
 
 def _response_dict(
-    request_id: uuid.UUID,
-    session_id: uuid.UUID,
+    request_id: uuid.UUID | str,
+    session_id: uuid.UUID | str,
     response_source: str,
     planner_reply: str,
     memory: dict,
@@ -109,59 +119,12 @@ def _response_dict(
     }
 
 
-async def process_s1_names(
-    db: AsyncSession,
-    groom_name: str,
-    bride_name: str,
-) -> dict:
-    """
-    S1 — System-handled. No AI call.
-    Creates session, seeds identity memory, advances to S2.
-    """
-    request_id = uuid.uuid4()
-    session, memory_v0 = await SessionService.create_session(db, groom_name, bride_name)
-
-    # Advance to S2
-    await SessionService.update_stage(
-        db, session,
-        new_stage=StageId.S2_BASICS.value,
-        decision_type=StageDecisionType.ADVANCE.value,
-        request_id=request_id,
-    )
-
-    # Save the planner welcome message
-    welcome = (
-        f"Lovely to meet you both, {groom_name} and {bride_name}! 💕 "
-        f"What wedding destination are you dreaming of, and what time of year are you planning for?"
-    )
-    await SessionService.append_message(
-        db,
-        session_id=session.id,
-        role=MessageRole.PLANNER.value,
-        content=welcome,
-        message_type=MessageType.CONVERSATION_TURN.value,
-        stage=StageId.S1_NAMES.value,
-        source=ResponseSource.SYSTEM.value,
-        request_id=request_id,
-    )
-
-    memory = memory_v0.memory_json
-
-    return {
-        "requestId": str(request_id),
-        "sessionId": str(session.id),
-        "responseSource": ResponseSource.SYSTEM.value,
-        "plannerReply": welcome,
-        "memoryPatch": {"identity": memory.get("identity", {})},
-        "updatedMemoryVersion": 0,
-        "stageDecision": {"type": StageDecisionType.ADVANCE.value, "stage": StageId.S2_BASICS.value},
-        "staleSections": [],
-        "openQuestions": [],
-        "suggestions": [],
-        "selectedChips": build_selected_chips(memory),
-        "plannerNotesView": build_planner_notes_view(memory),
-        "errorCode": None,
-    }
+def _is_direction_request(message: str) -> bool:
+    msg = message.lower()
+    return any(p in msg for p in (
+        "show me direction", "show directions", "see direction",
+        "directions", "design direction",
+    ))
 
 
 def _direction_options_from_sites(sites: list[dict]) -> list[dict]:
@@ -283,8 +246,6 @@ async def _persist_direction_recommendations(
     request_id: uuid.UUID,
 ) -> None:
     batch_id = uuid.uuid4()
-    from sqlalchemy import select
-    from app.models.event_site import EventSite
     for opt in options:
         result = await db.execute(
             select(EventSite.id).where(EventSite.slug == opt.get("id"))
@@ -303,19 +264,74 @@ async def _persist_direction_recommendations(
             ))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Primary Workflows (S1, Synthesis, Conversation Turn)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def process_s1_names(
+    db: AsyncSession,
+    groom_name: str,
+    bride_name: str,
+) -> dict:
+    """
+    S1 — System-handled. No AI call.
+    Creates session, seeds identity memory, advances to S2.
+    """
+    request_id = uuid.uuid4()
+    session, memory_v0 = await SessionService.create_session(db, groom_name, bride_name)
+
+    # Advance to S2
+    await SessionService.update_stage(
+        db, session,
+        new_stage=StageId.S2_BASICS.value,
+        decision_type=StageDecisionType.ADVANCE.value,
+        request_id=request_id,
+    )
+
+    welcome = (
+        f"Lovely to meet you both, {groom_name} and {bride_name}! 💕 "
+        f"What wedding destination are you dreaming of, and what time of year are you planning for?"
+    )
+    await SessionService.append_message(
+        db,
+        session_id=session.id,
+        role=MessageRole.PLANNER.value,
+        content=welcome,
+        message_type=MessageType.CONVERSATION_TURN.value,
+        stage=StageId.S1_NAMES.value,
+        source=ResponseSource.SYSTEM.value,
+        request_id=request_id,
+    )
+
+    memory = memory_v0.memory_json
+
+    return {
+        "requestId": str(request_id),
+        "sessionId": str(session.id),
+        "responseSource": ResponseSource.SYSTEM.value,
+        "plannerReply": welcome,
+        "memoryPatch": {"identity": memory.get("identity", {})},
+        "updatedMemoryVersion": 0,
+        "stageDecision": {"type": StageDecisionType.ADVANCE.value, "stage": StageId.S2_BASICS.value},
+        "staleSections": [],
+        "openQuestions": [],
+        "suggestions": [],
+        "selectedChips": build_selected_chips(memory),
+        "plannerNotesView": build_planner_notes_view(memory),
+        "errorCode": None,
+    }
+
+
 async def _execute_direction_from_embeddings(
     db: AsyncSession,
-    session,
+    session: Any,
     session_id: uuid.UUID,
     stage: str,
     request_id: uuid.UUID,
     *,
     save_planner_message: bool = True,
 ) -> dict:
-    """
-    Fast S6 path: embed canonical memory → top event sites → return top 3.
-    LLM enrichment is optional; timeouts must not fail the turn.
-    """
+    """Fast S6 path: embed canonical memory → top event sites → return top 3."""
     mem_version = await MemoryService.get_latest_memory(db, session_id)
     if not mem_version:
         raise ValueError(f"No memory for session {session_id}")
@@ -345,8 +361,6 @@ async def _execute_direction_from_embeddings(
             message="I couldn't find matching directions yet. Please try again shortly.",
         )
 
-    # Embedding-only by default — do not block the turn on a long Gemma call.
-    # Reasons come from curated event_site.profile_json.
     response_source = ResponseSource.RULE.value
     place = (memory.get("occasion") or {}).get("place") or "your celebration"
     planner_reply = _build_direction_planner_reply(options, place)
@@ -426,7 +440,7 @@ async def _execute_direction_from_embeddings(
 
 async def _execute_synthesis(
     db: AsyncSession,
-    session,
+    session: Any,
     session_id: uuid.UUID,
     synthesis_type: str,
     stage: str,
@@ -580,43 +594,84 @@ async def _execute_synthesis(
     )
 
 
-async def process_conversation_turn(
+async def process_synthesis_request(
     db: AsyncSession,
     session_id: uuid.UUID,
-    user_message: str,
-    images: list[str] | None = None,
+    synthesis_type: str | None = None,
 ) -> dict:
-    """Main pipeline for conversation_turn event type.
-
-    Optional images (base64) are analysed first via the vision model.
-    The extracted visual signals are merged into memory as earlySignals
-    before the regular intent/conversation pipeline runs.
-    Images are never stored to disk or database.
-    """
+    """Pipeline for synthesis_request: brief, direction, or summary."""
     request_id = uuid.uuid4()
-    images = images or []
 
-    # 1. Load session
     session = await SessionService.get_session(db, session_id)
     if not session:
         raise ValueError(f"Session {session_id} not found")
 
-    # Backend owns current stage — client cannot drive stage transitions
     stage = session.current_stage
-
-    # 2. Load memory
     mem_version = await MemoryService.get_latest_memory(db, session_id)
     if not mem_version:
         raise ValueError(f"No memory for session {session_id}")
     memory = mem_version.memory_json
+
+    if stage == StageId.S4_VIBE.value:
+        resolved = resolve_primary_vibe(memory)
+        if resolved and not (memory.get("vibe") or {}).get("primaryVibe"):
+            sync = await MemoryService.apply_patch(
+                db, session,
+                {"vibe": {"primaryVibe": resolved}},
+                request_id=request_id,
+            )
+            memory = sync.memory_json
+
+    synthesis_type = synthesis_type or StagePolicy.infer_synthesis_type(stage, memory)
+    if not synthesis_type:
+        if stage == StageId.S4_VIBE.value and not resolve_primary_vibe(memory):
+            return _make_error_response(
+                request_id, session_id, stage, memory,
+                "VIBE_INCOMPLETE",
+                "Confirm your primary vibe with a conversation_turn first — "
+                "then the brief generates automatically (or call synthesis_request again).",
+            )
+        return _make_error_response(
+            request_id, session_id, stage, memory,
+            f"CANNOT_INFER_SYNTHESIS_TYPE:{stage}",
+            "Synthesis is available on s5_brief (brief/directions), s6_directions, "
+            "and s11_summary — or on s4_vibe once vibe is confirmed.",
+        )
+
+    run_stage = stage
+    if stage == StageId.S4_VIBE.value and synthesis_type == SynthesisType.BRIEF.value:
+        run_stage = StageId.S5_BRIEF.value
+
+    return await _execute_synthesis(
+        db, session, session_id, synthesis_type, run_stage, request_id,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LangGraph Nodes & State Graph for process_conversation_turn
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def node_load_session(state: WeddingState) -> WeddingState:
+    db: AsyncSession = state["db"]
+    session_id = uuid.UUID(state["session_id"])
+    request_id = uuid.UUID(state["request_id"])
+
+    session = await SessionService.get_session(db, session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    stage = session.current_stage
+    mem_version = await MemoryService.get_latest_memory(db, session_id)
+    if not mem_version:
+        raise ValueError(f"No memory for session {session_id}")
+
+    memory = mem_version.memory_json
     memory_before = copy.deepcopy(memory)
 
-    # 2.5  Image analysis (Step 0) — run BEFORE intent so the text pipeline
-    #       sees the enriched memory with visual signals already applied.
-    #       Images are analysed in-memory; nothing is persisted to disk/DB.
-    image_planner_note: str = ""
+    images = state.get("images") or []
+    image_context = ""
     if images:
-        vis_patch, image_planner_note, _vis_telemetry = await analyse_images(
+        vis_patch, image_context, _vis_telemetry = await analyse_images(
             images, stage, memory
         )
         if vis_patch:
@@ -624,29 +679,30 @@ async def process_conversation_turn(
                 db, session, vis_patch, request_id=request_id
             )
             memory = vis_mem.memory_json
-            memory_before = copy.deepcopy(memory)  # treat enriched memory as new baseline
-
-    # Special: at s5_brief, "show me directions" triggers direction synthesis
-    if stage == StageId.S5_BRIEF.value and _is_direction_request(user_message):
-        await SessionService.append_message(
-            db, session_id=session_id,
-            role=MessageRole.CLIENT.value, content=user_message,
-            message_type=MessageType.SYNTHESIS_REQUEST.value,
-            stage=stage, source=None, request_id=request_id,
-            metadata={"selectedChips": build_selected_chips(memory)},
-        )
-        return await _execute_synthesis(
-            db, session, session_id, SynthesisType.DIRECTION.value,
-            stage, request_id, save_planner_message=True,
-        )
+            memory_before = copy.deepcopy(memory)
 
     all_messages = await SessionService.get_recent_messages(db, session_id, limit=21)
-    history_for_prompt = [
+    recent_messages = [
         {"role": m.role, "content": m.content_text}
         for m in all_messages
     ]
 
-    # ── Call 1: intent classification ─────────────────────────────────────
+    return {
+        "session": session,
+        "current_stage": stage,
+        "memory": memory,
+        "memory_before": memory_before,
+        "memory_version": mem_version.version_no,
+        "recent_messages": recent_messages,
+        "image_context": image_context,
+    }
+
+
+async def node_classify_intent(state: WeddingState) -> WeddingState:
+    stage = state["current_stage"]
+    memory = state["memory"]
+    user_message = state["user_message"]
+
     turn_intent: dict = {
         "intentType": "normal",
         "targetSections": [],
@@ -670,17 +726,26 @@ async def process_conversation_turn(
                 "summary": str(intent_raw.get("summary") or ""),
             }
     except AIGatewayError:
-        # Fall through with default normal intent — Call 2 still runs
         pass
 
-    # ── Call 2: conversation turn with intent-aware stage rules ───────────
+    return {"intent": turn_intent}
+
+
+async def node_conversation_turn(state: WeddingState) -> WeddingState:
+    stage = state["current_stage"]
+    memory = state["memory"]
+    recent_messages = state["recent_messages"]
+    user_message = state["user_message"]
+    intent = state["intent"]
+    image_context = state.get("image_context", "")
+
     messages = build_conversation_turn_prompt(
         stage=stage,
         memory=memory,
-        recent_messages=history_for_prompt,
+        recent_messages=recent_messages,
         user_message=user_message,
-        intent=turn_intent,
-        image_context=image_planner_note,  # vision model note — LLM writes ONE cohesive reply
+        intent=intent,
+        image_context=image_context,
     )
 
     telemetry: dict = {}
@@ -697,49 +762,37 @@ async def process_conversation_turn(
             "model": settings.active_chat_model,
             "provider": settings.llm_provider,
             "http_status": e.http_status,
-            **intent_telemetry,
         }
 
-    if error_code or not ai_result:
-        await log_ai_turn(
-            db, request_id, session_id, stage,
-            EventType.CONVERSATION_TURN.value,
-            ResponseSource.ERROR.value,
-            prompt_family="conversation_turn",
-            model=telemetry.get("model"),
-            http_status=telemetry.get("http_status"),
-            latency_ms=telemetry.get("latency_ms"),
-            validation_status="rejected",
-            failure_code=error_code or "UNKNOWN",
-        )
-        return _make_error_response(
-            request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED",
-            message=error_message or "Something went wrong. Please try again.",
-        )
+    return {
+        "ai_result": ai_result or {},
+        "ai_telemetry": telemetry,
+        "error_code": error_code,
+    }
 
-    ai_result = sanitize_ai_response(ai_result, stage)
 
-    # Honor intent when call-2 missed the empty-patch / decision shape
-    intent_type = turn_intent.get("intentType") or "normal"
+async def node_sanitize_and_validate(state: WeddingState) -> WeddingState:
+    if state.get("error_code") or not state.get("ai_result"):
+        return {"validation_ok": False, "validation_error": state.get("error_code") or "AI_CALL_FAILED"}
+
+    stage = state["current_stage"]
+    ai_result = sanitize_ai_response(state["ai_result"], stage)
+    intent = state["intent"]
+    intent_type = intent.get("intentType") or "normal"
+
     if intent_type == "gibberish":
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.REQUEST_CLARIFICATION.value,
             "stage": stage,
         }
-    elif intent_type == "help":
+    elif intent_type in ("help", "more_suggestions"):
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.STAY.value,
             "stage": stage,
         }
-    elif intent_type == "more_suggestions":
-        ai_result["memoryPatch"] = {}
-        ai_result["stageDecision"] = {
-            "type": StageDecisionType.STAY.value,
-            "stage": stage,
-        }
-    elif intent_type == "correction" and turn_intent.get("decisionHint") == "reanchor":
+    elif intent_type == "correction" and intent.get("decisionHint") == "reanchor":
         sd = ai_result.get("stageDecision") or {}
         if sd.get("type") == StageDecisionType.ADVANCE.value:
             ai_result["stageDecision"] = {
@@ -748,28 +801,32 @@ async def process_conversation_turn(
             }
 
     is_valid, val_error = validate_ai_response(ai_result, stage)
-    if not is_valid:
-        await log_ai_turn(
-            db, request_id, session_id, stage,
-            EventType.CONVERSATION_TURN.value,
-            ResponseSource.ERROR.value,
-            prompt_family="conversation_turn",
-            model=telemetry.get("model"),
-            latency_ms=telemetry.get("latency_ms"),
-            validation_status="rejected",
-            failure_code=val_error,
-        )
-        return _make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
+    return {
+        "ai_result": ai_result,
+        "validation_ok": is_valid,
+        "validation_error": val_error,
+    }
+
+
+async def node_apply_memory(state: WeddingState) -> WeddingState:
+    db: AsyncSession = state["db"]
+    session = state["session"]
+    session_id = uuid.UUID(state["session_id"])
+    request_id = uuid.UUID(state["request_id"])
+    stage = state["current_stage"]
+    memory_before = state["memory_before"]
+    ai_result = state["ai_result"]
 
     sd_type = (ai_result.get("stageDecision") or {}).get("type", "")
-    # Memory patch already sanitized in sanitize_ai_response()
     patch = ai_result.get("memoryPatch", {})
     if sd_type == StageDecisionType.REQUEST_CLARIFICATION.value:
         patch = {}
 
     open_questions = ai_result.get("openQuestions", [])
-    updated_version = mem_version.version_no
     stale_sections = list(ai_result.get("staleSections", []))
+    updated_version = state["memory_version"]
+    memory = state["memory"]
+    correction = None
 
     if patch:
         new_mem_version = await MemoryService.apply_patch(
@@ -794,21 +851,15 @@ async def process_conversation_turn(
                 updated_version = new_mem_version.version_no
                 stale_sections = new_mem_version.stale_sections
 
-        # Sync session name columns when identity names are patched
         if "identity" in patch:
             identity_patch = patch["identity"]
             await SessionService.update_names(
-                db,
-                session,
+                db, session,
                 groom_name=identity_patch.get("groomName") or None,
                 bride_name=identity_patch.get("brideName") or None,
             )
-    else:
-        correction = None
 
-    # Backfill canonical vibe when UI chips exist but memory.vibe.primaryVibe is empty
     if stage == StageId.S4_VIBE.value:
-        from app.domain.memory_schema import resolve_primary_vibe
         resolved = resolve_primary_vibe(memory)
         if resolved and not (memory.get("vibe") or {}).get("primaryVibe"):
             sync = await MemoryService.apply_patch(
@@ -819,7 +870,7 @@ async def process_conversation_turn(
             memory = sync.memory_json
             updated_version = sync.version_no
 
-    # Save client message with post-patch chip snapshot
+    images = state.get("images") or []
     _client_meta: dict = {"selectedChips": build_selected_chips(memory)}
     if images:
         _client_meta["imageCount"] = len(images)
@@ -827,7 +878,7 @@ async def process_conversation_turn(
         db,
         session_id=session_id,
         role=MessageRole.CLIENT.value,
-        content=user_message,
+        content=state["user_message"],
         message_type=MessageType.CONVERSATION_TURN.value,
         stage=stage,
         source=None,
@@ -835,16 +886,37 @@ async def process_conversation_turn(
         metadata=_client_meta,
     )
 
-    # 9. Resolve stage decision — backend policy owns final movement
+    return {
+        "memory": memory,
+        "memory_version": updated_version,
+        "memory_patch": patch,
+        "stale_sections": stale_sections,
+        "correction": correction,
+    }
+
+
+async def node_resolve_stage(state: WeddingState) -> WeddingState:
+    db: AsyncSession = state["db"]
+    session = state["session"]
+    session_id = uuid.UUID(state["session_id"])
+    request_id = uuid.UUID(state["request_id"])
+    stage = state["current_stage"]
+    memory = state["memory"]
+    memory_before = state["memory_before"]
+    memory_patch = state["memory_patch"]
+    ai_result = state["ai_result"]
+    intent = state["intent"]
+    stale_sections = state["stale_sections"]
+    correction = state["correction"]
+
     sd = ai_result.get("stageDecision", {})
     ai_decision_type = sd.get("type", StageDecisionType.STAY.value)
     ai_to_stage = sd.get("stage", stage)
 
-    if patch and not correction:
-        correction = detect_upstream_correction(patch, memory_before, memory, stage)
+    if memory_patch and not correction:
+        correction = detect_upstream_correction(memory_patch, memory_before, memory, stage)
 
     if correction:
-        # Docs Example 3/5: reanchor on current stage + stale downstream
         final_decision_type, final_stage, _reason = resolve_correction_stage_decision(
             correction, stage
         )
@@ -852,16 +924,15 @@ async def process_conversation_turn(
     else:
         final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
             ai_decision_type, ai_to_stage, stage, memory,
-            open_questions=open_questions,
+            open_questions=ai_result.get("openQuestions", []),
         )
         if (
-            turn_intent.get("intentType") == "correction"
-            and turn_intent.get("decisionHint") == StageDecisionType.REANCHOR.value
+            intent.get("intentType") == "correction"
+            and intent.get("decisionHint") == StageDecisionType.REANCHOR.value
         ):
             final_decision_type = StageDecisionType.REANCHOR.value
             final_stage = stage
 
-    # 10. Advance / reanchor stage if needed
     if final_stage != stage:
         await SessionService.update_stage(
             db, session,
@@ -870,7 +941,6 @@ async def process_conversation_turn(
             request_id=request_id,
         )
     elif final_decision_type == StageDecisionType.REANCHOR.value and correction:
-        # Record reanchor in history even when stage stays the same
         await SessionService.update_stage(
             db, session,
             new_stage=stage,
@@ -879,8 +949,7 @@ async def process_conversation_turn(
             reason_code="upstream_correction_reanchor",
         )
 
-    # 10b. Auto-chain brief synthesis when S4 vibe completes → S5
-    artifact_content = None
+    synthesis_result = None
     if (
         stage == StageId.S4_VIBE.value
         and final_stage == StageId.S5_BRIEF.value
@@ -888,99 +957,205 @@ async def process_conversation_turn(
         and StagePolicy.is_stage_complete(StageId.S3_PERSONALITY.value, memory)
         and StagePolicy.is_stage_complete(StageId.S4_VIBE.value, memory)
     ):
-        brief_result = await _execute_synthesis(
+        brief_res = await _execute_synthesis(
             db, session, session_id, SynthesisType.BRIEF.value,
             StageId.S5_BRIEF.value, request_id, save_planner_message=False,
         )
-        if not brief_result.get("errorCode"):
-            return brief_result
+        if not brief_res.get("errorCode"):
+            synthesis_result = brief_res
 
-    # 10c/10d. On S6 corrections → refresh directions (not brief). On S5 → brief only.
-    if correction and stage == StageId.S6_DIRECTIONS.value and (
+    elif correction and stage == StageId.S6_DIRECTIONS.value and (
         correction.get("shouldRegenerateDirection")
         or correction.get("shouldRefreshDirectionsOnS6")
     ):
-        dir_result = await _execute_synthesis(
+        dir_res = await _execute_synthesis(
             db, session, session_id, SynthesisType.DIRECTION.value,
             StageId.S6_DIRECTIONS.value, request_id, save_planner_message=False,
         )
-        if not dir_result.get("errorCode"):
+        if not dir_res.get("errorCode"):
             ack = _summarize_correction_for_reply(correction, memory_before, memory)
-            opts = (dir_result.get("artifactContent") or {}).get("directionOptions") or []
+            opts = (dir_res.get("artifactContent") or {}).get("directionOptions") or []
             place = (memory.get("occasion") or {}).get("place") or "your celebration"
-            dir_result["plannerReply"] = _build_direction_planner_reply(
+            dir_res["plannerReply"] = _build_direction_planner_reply(
                 opts, place, correction_ack=ack,
             )
-            dir_result["staleSections"] = stale_sections
-            dir_result["memoryPatch"] = {**(dir_result.get("memoryPatch") or {}), **(patch or {})}
-            dir_result["stageDecision"] = {
+            dir_res["staleSections"] = stale_sections
+            dir_res["memoryPatch"] = {**(dir_res.get("memoryPatch") or {}), **(memory_patch or {})}
+            dir_res["stageDecision"] = {
                 "type": StageDecisionType.REANCHOR.value,
                 "stage": StageId.S6_DIRECTIONS.value,
             }
             await SessionService.append_message(
                 db, session_id=session_id,
                 role=MessageRole.PLANNER.value,
-                content=dir_result["plannerReply"],
+                content=dir_res["plannerReply"],
                 message_type=MessageType.SYNTHESIS_REQUEST.value,
                 stage=StageId.S6_DIRECTIONS.value,
-                source=dir_result.get("responseSource", ResponseSource.RULE.value),
+                source=dir_res.get("responseSource", ResponseSource.RULE.value),
                 request_id=request_id,
                 metadata={
                     "selectedChips": build_selected_chips(memory),
                     "artifactType": "direction",
-                    "artifactContent": dir_result.get("artifactContent"),
+                    "artifactContent": dir_res.get("artifactContent"),
                     "correctionAck": True,
                 },
             )
-            return dir_result
+            synthesis_result = dir_res
 
-    if correction and correction.get("shouldRegenerateBrief"):
-        brief_result = await _execute_synthesis(
+    elif correction and correction.get("shouldRegenerateBrief"):
+        brief_res = await _execute_synthesis(
             db, session, session_id, SynthesisType.BRIEF.value,
             stage, request_id, save_planner_message=False,
         )
-        if not brief_result.get("errorCode"):
+        if not brief_res.get("errorCode"):
             ack = _summarize_correction_for_reply(correction, memory_before, memory)
-            brief_text = (brief_result.get("artifactContent") or {}).get("briefText") or ""
-            # Prefer reflective brief + explicit change acknowledgment
-            refreshed = brief_result.get("plannerReply") or ""
+            brief_text = (brief_res.get("artifactContent") or {}).get("briefText") or ""
+            refreshed = brief_res.get("plannerReply") or ""
             if brief_text:
                 refreshed = f"{ack}\n\n{brief_text}"
             else:
                 refreshed = f"{ack} {refreshed}".strip()
-            brief_result["plannerReply"] = refreshed
-            brief_result["staleSections"] = stale_sections
-            brief_result["memoryPatch"] = {**(brief_result.get("memoryPatch") or {}), **(patch or {})}
-            brief_result["stageDecision"] = {
+            brief_res["plannerReply"] = refreshed
+            brief_res["staleSections"] = stale_sections
+            brief_res["memoryPatch"] = {**(brief_res.get("memoryPatch") or {}), **(memory_patch or {})}
+            brief_res["stageDecision"] = {
                 "type": StageDecisionType.REANCHOR.value,
                 "stage": stage,
             }
-            # Persist the combined planner message
             await SessionService.append_message(
                 db, session_id=session_id,
                 role=MessageRole.PLANNER.value,
                 content=refreshed,
                 message_type=MessageType.SYNTHESIS_REQUEST.value,
                 stage=stage,
-                source=brief_result.get("responseSource", ResponseSource.OPENAI.value),
+                source=brief_res.get("responseSource", ResponseSource.OPENAI.value),
                 request_id=request_id,
                 metadata={
                     "selectedChips": build_selected_chips(memory),
                     "artifactType": "brief",
-                    "artifactContent": brief_result.get("artifactContent"),
+                    "artifactContent": brief_res.get("artifactContent"),
                     "correctionAck": True,
                 },
             )
-            return brief_result
+            synthesis_result = brief_res
 
-    # 11. Backend-assembled UI hints (chips for current or next stage)
+    return {
+        "decision_type": final_decision_type,
+        "to_stage": final_stage,
+        "stale_sections": stale_sections,
+        "correction": correction,
+        "synthesis_result": synthesis_result,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Graph Construction
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_wedding_graph():
+    builder = StateGraph(WeddingState)
+    builder.add_node("load_session", node_load_session)
+    builder.add_node("classify_intent", node_classify_intent)
+    builder.add_node("conversation_turn", node_conversation_turn)
+    builder.add_node("sanitize_and_validate", node_sanitize_and_validate)
+    builder.add_node("apply_memory", node_apply_memory)
+    builder.add_node("resolve_stage", node_resolve_stage)
+
+    builder.set_entry_point("load_session")
+    builder.add_edge("load_session", "classify_intent")
+    builder.add_edge("classify_intent", "conversation_turn")
+    builder.add_edge("conversation_turn", "sanitize_and_validate")
+    builder.add_edge("sanitize_and_validate", "apply_memory")
+    builder.add_edge("apply_memory", "resolve_stage")
+    builder.add_edge("resolve_stage", END)
+
+    return builder.compile()
+
+
+_graph = _build_wedding_graph()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry Point for process_conversation_turn
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def process_conversation_turn(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    user_message: str,
+    images: list[str] | None = None,
+) -> dict:
+    request_id = uuid.uuid4()
+    images = images or []
+
+    session = await SessionService.get_session(db, session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+    stage = session.current_stage
+
+    mem_version = await MemoryService.get_latest_memory(db, session_id)
+    if not mem_version:
+        raise ValueError(f"No memory for session {session_id}")
+    memory = mem_version.memory_json
+
+    if stage == StageId.S5_BRIEF.value and _is_direction_request(user_message):
+        await SessionService.append_message(
+            db, session_id=session_id,
+            role=MessageRole.CLIENT.value, content=user_message,
+            message_type=MessageType.SYNTHESIS_REQUEST.value,
+            stage=stage, source=None, request_id=request_id,
+            metadata={"selectedChips": build_selected_chips(memory)},
+        )
+        return await _execute_synthesis(
+            db, session, session_id, SynthesisType.DIRECTION.value,
+            stage, request_id, save_planner_message=True,
+        )
+
+    initial_state: WeddingState = {
+        "session_id": str(session_id),
+        "request_id": str(request_id),
+        "user_message": user_message,
+        "images": images,
+        "db": db,
+    }
+
+    final_state = await _graph.ainvoke(initial_state)
+
+    if final_state.get("synthesis_result"):
+        return final_state["synthesis_result"]
+
+    if not final_state.get("validation_ok"):
+        err_code = final_state.get("validation_error") or "AI_CALL_FAILED"
+        await log_ai_turn(
+            db, request_id, session_id, stage,
+            EventType.CONVERSATION_TURN.value,
+            ResponseSource.ERROR.value,
+            prompt_family="conversation_turn",
+            validation_status="rejected",
+            failure_code=err_code,
+        )
+        return _make_error_response(
+            request_id, session_id, stage, memory, err_code,
+        )
+
+    final_stage = final_state.get("to_stage", stage)
+    final_decision_type = final_state.get("decision_type", StageDecisionType.STAY.value)
+    ai_result = final_state.get("ai_result", {})
+    intent = final_state.get("intent", {})
+    memory = final_state.get("memory", memory)
+    memory_patch = final_state.get("memory_patch", {})
+    updated_version = final_state.get("memory_version", mem_version.version_no)
+    stale_sections = final_state.get("stale_sections", [])
+    correction = final_state.get("correction")
+    memory_before = final_state.get("memory_before", memory)
+
     suggestion_stage = final_stage if final_stage != stage else stage
     suggestions = build_ui_suggestions(
         stage,
         memory,
         ai_result.get("suggestions", []),
         for_stage=suggestion_stage,
-        prefer_custom=(turn_intent.get("intentType") == "more_suggestions"),
+        prefer_custom=(intent.get("intentType") == "more_suggestions"),
     )
     suggestions = [
         s for s in suggestions
@@ -989,8 +1164,6 @@ async def process_conversation_turn(
         and not re.search(r"guestcount|_guests$|_estimate", str(s.get("label", "")), re.I)
     ]
 
-    # 12. Planner reply — backend aligns copy to FINAL stage (chips already do this)
-    # Root cause of S2-text-on-S3: LLM is prompted on current stage; StagePolicy advances after.
     correction_ack = ""
     if correction:
         correction_ack = _summarize_correction_for_reply(correction, memory_before, memory)
@@ -1005,10 +1178,6 @@ async def process_conversation_turn(
         correction_ack=correction_ack,
     )
 
-    # NOTE: image_planner_note is passed into the prompt (image_context) above —
-    # the text LLM writes the acknowledgement organically into plannerReply.
-    # No prepend needed here.
-
     await SessionService.append_message(
         db,
         session_id=session_id,
@@ -1021,92 +1190,26 @@ async def process_conversation_turn(
         metadata={"selectedChips": build_selected_chips(memory)},
     )
 
-    # 13. Log
+    ai_telemetry = final_state.get("ai_telemetry", {})
     await log_ai_turn(
         db, request_id, session_id, stage,
         EventType.CONVERSATION_TURN.value,
         ResponseSource.OPENAI.value,
         prompt_family="conversation_turn",
-        model=telemetry.get("model"),
-        http_status=telemetry.get("http_status"),
-        latency_ms=telemetry.get("latency_ms"),
-        input_tokens=telemetry.get("input_tokens"),
-        output_tokens=telemetry.get("output_tokens"),
+        model=ai_telemetry.get("model"),
+        http_status=ai_telemetry.get("http_status"),
+        latency_ms=ai_telemetry.get("latency_ms"),
+        input_tokens=ai_telemetry.get("input_tokens"),
+        output_tokens=ai_telemetry.get("output_tokens"),
         validation_status="accepted",
     )
 
     return _response_dict(
         request_id, session_id, ResponseSource.OPENAI.value, planner_reply, memory,
-        memory_patch=patch,
+        memory_patch=memory_patch,
         updated_version=updated_version,
         stage_decision={"type": final_decision_type, "stage": final_stage},
         stale_sections=stale_sections,
-        open_questions=open_questions,
+        open_questions=ai_result.get("openQuestions", []),
         suggestions=suggestions,
-        artifact_content=artifact_content,
-    )
-
-
-def _is_direction_request(message: str) -> bool:
-    msg = message.lower()
-    return any(p in msg for p in (
-        "show me direction", "show directions", "see direction",
-        "directions", "design direction",
-    ))
-
-
-async def process_synthesis_request(
-    db: AsyncSession,
-    session_id: uuid.UUID,
-    synthesis_type: str | None = None,
-) -> dict:
-    """Pipeline for synthesis_request: brief, direction, or summary."""
-    request_id = uuid.uuid4()
-
-    session = await SessionService.get_session(db, session_id)
-    if not session:
-        raise ValueError(f"Session {session_id} not found")
-
-    stage = session.current_stage
-    mem_version = await MemoryService.get_latest_memory(db, session_id)
-    if not mem_version:
-        raise ValueError(f"No memory for session {session_id}")
-    memory = mem_version.memory_json
-
-    # Sync committed vibe chips into canonical memory before inferring synthesis
-    if stage == StageId.S4_VIBE.value:
-        from app.domain.memory_schema import resolve_primary_vibe
-        resolved = resolve_primary_vibe(memory)
-        if resolved and not (memory.get("vibe") or {}).get("primaryVibe"):
-            sync = await MemoryService.apply_patch(
-                db, session,
-                {"vibe": {"primaryVibe": resolved}},
-                request_id=request_id,
-            )
-            memory = sync.memory_json
-
-    synthesis_type = synthesis_type or StagePolicy.infer_synthesis_type(stage, memory)
-    if not synthesis_type:
-        from app.domain.memory_schema import resolve_primary_vibe
-        if stage == StageId.S4_VIBE.value and not resolve_primary_vibe(memory):
-            return _make_error_response(
-                request_id, session_id, stage, memory,
-                "VIBE_INCOMPLETE",
-                "Confirm your primary vibe with a conversation_turn first — "
-                "then the brief generates automatically (or call synthesis_request again).",
-            )
-        return _make_error_response(
-            request_id, session_id, stage, memory,
-            f"CANNOT_INFER_SYNTHESIS_TYPE:{stage}",
-            "Synthesis is available on s5_brief (brief/directions), s6_directions, "
-            "and s11_summary — or on s4_vibe once vibe is confirmed.",
-        )
-
-    # S4 explicit brief request → run brief and land on s5_brief
-    run_stage = stage
-    if stage == StageId.S4_VIBE.value and synthesis_type == SynthesisType.BRIEF.value:
-        run_stage = StageId.S5_BRIEF.value
-
-    return await _execute_synthesis(
-        db, session, session_id, synthesis_type, run_stage, request_id,
     )
