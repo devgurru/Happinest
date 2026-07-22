@@ -128,7 +128,8 @@ def _is_direction_request(message: str) -> bool:
 
 
 def _direction_options_from_sites(sites: list[dict]) -> list[dict]:
-    """Build S6 directionOptions from embedding matches — no LLM required."""
+    """Build S6 directionOptions from embedding matches — no LLM required.
+    Returns complete event site data including images for UI display."""
     options = []
     for i, site in enumerate(sites[:3], start=1):
         profile = site.get("profile_json") or {}
@@ -148,6 +149,12 @@ def _direction_options_from_sites(sites: list[dict]) -> list[dict]:
             "reasonText": reason,
             "siteType": site.get("site_type"),
             "shortDescription": site.get("short_description"),
+            "profileJson": profile,
+            "heroImageUrl": site.get("hero_image_url"),
+            "galleryJson": site.get("gallery_json") or [],
+            "isActive": site.get("is_active"),
+            "seedVersion": site.get("seed_version"),
+            # Keep backward compatibility with existing fields
             "styleTags": profile.get("styleTags") or [],
             "vibeTags": profile.get("vibeTags") or [],
         })
@@ -399,10 +406,8 @@ async def _execute_direction_from_embeddings(
             decision_type=final_decision_type, request_id=request_id,
         )
 
-    suggestions = [
-        {"label": opt.get("name", ""), "category": "direction"}
-        for opt in options[:3]
-    ]
+    # No suggestions needed — the top 3 direction options ARE the suggestions
+    suggestions = []
 
     if save_planner_message:
         await SessionService.append_message(

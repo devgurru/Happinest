@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Keys from https://console.groq.com/ start with gsk_
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "qwen/qwen3.6-27b"
     # Vision model — used for image analysis (multimodal)
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 

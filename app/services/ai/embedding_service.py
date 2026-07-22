@@ -84,6 +84,7 @@ async def find_matching_event_sites(
     sql = text(
         """
         SELECT id, slug, name, site_type, short_description, profile_json,
+               hero_image_url, gallery_json, seed_version, is_active,
                1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM event_sites
         WHERE is_active = true AND embedding IS NOT NULL
@@ -110,6 +111,10 @@ async def find_matching_event_sites(
                 "site_type": s.site_type,
                 "short_description": s.short_description,
                 "profile_json": s.profile_json,
+                "hero_image_url": s.hero_image_url,
+                "gallery_json": s.gallery_json,
+                "seed_version": s.seed_version,
+                "is_active": s.is_active,
                 "similarity": None,
             }
             for s in sites
