@@ -117,7 +117,7 @@ class MemoryService:
         new_memory = deep_merge(current.memory_json, patch)
 
         # Fold legacy top-level occasion fields into occasion.{...}
-        from app.services.text_extract import get_occasion_state
+        from app.utils.validators import get_occasion_state
         occ_state = get_occasion_state(new_memory)
         new_memory["occasion"] = occ_state["occasion"]
         for legacy_key in (

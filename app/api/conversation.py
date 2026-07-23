@@ -29,8 +29,8 @@ from app.schemas.planner import (
     PlannerNotesView, PlannerResponse, StageDecisionSchema,
     normalize_suggestions, SelectedChipsView,
 )
-from app.services.orchestrator import process_conversation_turn, process_synthesis_request
-from app.services.session_service import SessionService
+from app.graph.wedding_graph import process_conversation_turn, process_synthesis_request
+from app.services.session.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["Conversation"])
 

@@ -1,6 +1,9 @@
 """
-Shared text extraction helpers for occasion timing and chip tags.
-Keeps junk (dates, cities, sentences) out of personality/vibe chip lists.
+Validators — pure validation/sanitization functions for memory data.
+
+Extracted from text_extract.py. These are deterministic functions that
+validate and clean memory values. They do NOT extract data from user
+messages — the AI intent agent handles all message understanding.
 """
 from __future__ import annotations
 
@@ -111,119 +114,6 @@ def is_past_date(date_preference: str) -> bool:
     return False
 
 
-def _resolve_relative_timing(message: str) -> str:
-    """
-    Replace relative year/month references with concrete computed values
-    BEFORE the main regex runs, so agents get an explicit year to patch.
-
-    Handles:
-      "next year"          → appends " {current_year + 1}"
-      "coming year"        → appends " {current_year + 1}"
-      "this year"          → appends " {current_year}"
-      "next December"      → "December {year}" (correct year from today)
-      "December next year" → "December {next_year}"   ← NEW
-      "June this year"     → "June {this_year}"        ← NEW
-    Only appends year when no explicit 4-digit year already appears.
-    """
-    from datetime import date
-    today      = date.today()
-    this_year  = today.year
-    next_year  = today.year + 1
-    msg_l      = message.lower()
-
-    already_has_year = bool(re.search(r"\b20\d{2}\b", message))
-
-    # Pattern: "[month] next year" / "[month] this year"
-    # Must check BEFORE the bare "next year" append so we get precise month+year
-    month_rel_year = re.search(
-        r"\b(january|february|march|april|may|june"
-        r"|july|august|september|october|november|december)"
-        r"\s+(?:of\s+)?(next year|this year|coming year|the next year|current year)\b",
-        msg_l,
-    )
-    if month_rel_year:
-        month_name = month_rel_year.group(1)
-        rel_phrase = month_rel_year.group(2)
-        resolved_year = next_year if "next" in rel_phrase or "coming" in rel_phrase else this_year
-        pattern = rf"\b{re.escape(month_name)}\s+(?:of\s+)?{re.escape(rel_phrase)}\b"
-        return re.sub(
-            pattern,
-            f"{month_name.title()} {resolved_year}",
-            message,
-            flags=re.IGNORECASE,
-        )
-
-    if not already_has_year:
-        # "next year" / "coming year" / "year after"
-        if re.search(r"\b(next year|coming year|year after|the next year)\b", msg_l):
-            return message + f" {next_year}"
-
-        # "this year" / "current year"
-        if re.search(r"\b(this year|current year|same year)\b", msg_l):
-            return message + f" {this_year}"
-
-    # "next [month]" — resolve correct year even if an unrelated year exists
-    next_month_match = re.search(
-        r"\bnext\s+(january|february|march|april|may|june"
-        r"|july|august|september|october|november|december)\b",
-        msg_l,
-    )
-    if next_month_match:
-        month_name = next_month_match.group(1)
-        month_num  = _MONTH_INDEX[month_name]
-        resolved_year = this_year if month_num > today.month else next_year
-        pattern = rf"\bnext\s+{re.escape(month_name)}\b"
-        return re.sub(
-            pattern,
-            f"{month_name.title()} {resolved_year}",
-            message,
-            flags=re.IGNORECASE,
-        )
-
-    return message
-
-
-def extract_month_or_season(message: str) -> dict:
-    """
-    Return {datePreference?} and/or {seasonPreference?} only for concrete timing.
-    Vague phrases like 'cold weather' are ignored for completion.
-    Named seasons only when explicitly said as a season — not inferred from month.
-
-    Relative phrases resolved before extraction:
-      "next year"     → current_year + 1
-      "this year"     → current_year
-      "next December" → December <resolved_year>
-    """
-    # Pre-process relative timing first
-    resolved = _resolve_relative_timing(message)
-    msg_l = message.lower()
-    result: dict = {}
-
-    date_match = re.search(
-        r"(early\s+|late\s+|mid\s+)?"
-        r"(january|february|march|april|may|june|july|august|september|october|november|december)"
-        r"(\s+\d{4})?",
-        resolved,
-        re.IGNORECASE,
-    )
-    if date_match:
-        result["datePreference"] = date_match.group(0).strip().title()
-
-    # Year-only fallback (e.g. message was just "next year" → resolved to "next year 2027")
-    if not result.get("datePreference"):
-        year_match = re.search(r"\b(202[6-9]|20[3-9]\d)\b", resolved)
-        if year_match:
-            result["datePreference"] = year_match.group(1)
-
-    # Only explicit season words — do NOT invent Spring from March
-    for season in VALID_SEASONS:
-        if re.search(rf"\b{season}\b", msg_l) and season not in MONTHS:
-            result["seasonPreference"] = season.title()
-            break
-
-    return result
-
-
 def is_concrete_timing(occasion: dict) -> bool:
     """True only when date/season is concrete, future, and not vague."""
     date = (occasion.get("datePreference") or "").strip().lower()
@@ -235,31 +125,98 @@ def is_concrete_timing(occasion: dict) -> bool:
         # Reject past dates — a wedding cannot be in the past
         if is_past_date(date):
             return False
-        if any(m in date for m in MONTHS):
+        if any(m in date for m in MONTHS) or re.search(r"\b20\d{2}\b", date):
             return True
-        if re.fullmatch(r"\d{4}", date):
-            return False
 
+    # Bare season name without year/month (e.g. "Winter", "Summer") is incomplete for S2
     if season:
         if any(vague in season for vague in VAGUE_TIMING):
             return False
-        if any(s == season or s in season for s in VALID_SEASONS):
+        has_year = bool(re.search(r"\b20\d{2}\b", season))
+        has_month = any(m in season for m in MONTHS)
+        if (has_year or has_month) and not is_past_date(season):
             return True
 
     return False
 
 
+
+def resolve_relative_date(date_preference: str) -> str:
+    """
+    Resolve relative timing expressions & preserve exact day/month/year dates.
+    Examples:
+      "12 june 2028" -> "12 June 2028"
+      "June 12, 2028" -> "12 June 2028"
+      "june next year" -> "June 2027" (when today is July 2026)
+      "june" -> "June 2027"
+    """
+    if not date_preference or not isinstance(date_preference, str):
+        return ""
+    text = date_preference.strip()
+    low = text.lower()
+    today = _date.today()
+    current_year = today.year
+    next_year = current_year + 1
+
+    # Find month
+    found_month = None
+    month_idx = None
+    for month_name, idx in _MONTH_INDEX.items():
+        if month_name in low:
+            found_month = month_name.title()
+            month_idx = idx
+            break
+
+    # Find day (e.g. "12", "12th", "1st", "31")
+    day_val = None
+    text_no_year = re.sub(r"\b20\d{2}\b", "", text)
+    day_match = re.search(r"\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b", text_no_year, re.I)
+    if day_match:
+        day_val = int(day_match.group(1))
+
+    is_next_year_mentioned = any(kw in low for kw in ("next year", "coming year", "following year"))
+
+    # Explicit 4-digit year already present (e.g. "2028")
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if year_match:
+        year_val = year_match.group(1)
+        if found_month and day_val:
+            return f"{day_val} {found_month} {year_val}"
+        if found_month:
+            return f"{found_month} {year_val}"
+        return year_val
+
+    if is_next_year_mentioned:
+        if found_month and day_val:
+            return f"{day_val} {found_month} {next_year}"
+        if found_month:
+            return f"{found_month} {next_year}"
+        return str(next_year)
+
+    if found_month and month_idx:
+        target_year = next_year if month_idx <= today.month else current_year
+        if day_val:
+            return f"{day_val} {found_month} {target_year}"
+        return f"{found_month} {target_year}"
+
+    return text
+
+
 def sanitize_timing_fields(occasion: dict) -> dict:
     """Strip vague or past timing values that should not unlock S2 advance."""
     occ = dict(occasion)
+    raw_date = (occ.get("datePreference") or "").strip()
+
+    # Resolve relative dates & preserve exact date strings
+    if raw_date:
+        occ["datePreference"] = resolve_relative_date(raw_date)
+
     date = (occ.get("datePreference") or "").strip().lower()
     season = (occ.get("seasonPreference") or "").strip().lower()
-    if date and (any(v in date for v in VAGUE_TIMING) or not any(m in date for m in MONTHS)):
-        extracted = extract_month_or_season(occ.get("datePreference") or "")
-        if extracted.get("datePreference"):
-            occ["datePreference"] = extracted["datePreference"]
-        else:
-            occ["datePreference"] = ""
+
+    if date and any(v in date for v in VAGUE_TIMING):
+        occ["datePreference"] = ""
+
     # Strip past dates — never save a past wedding date to memory
     if occ.get("datePreference") and is_past_date(occ["datePreference"]):
         occ["datePreference"] = ""
@@ -267,6 +224,7 @@ def sanitize_timing_fields(occasion: dict) -> dict:
         occ["seasonPreference"] = ""
     if season and any(v in season for v in VAGUE_TIMING) and not any(s in season for s in VALID_SEASONS):
         occ["seasonPreference"] = ""
+
 
     # Don't let vibe/culture words pollute place or setting
     place = (occ.get("place") or "").strip().lower()
@@ -287,14 +245,6 @@ def sanitize_timing_fields(occasion: dict) -> dict:
         occ["settingPreference"] = ""
 
     return occ
-
-
-def extract_place_from_message(message: str) -> str | None:
-    msg_l = message.lower()
-    for city in KNOWN_CITIES:
-        if re.search(rf"\b{re.escape(city)}\b", msg_l):
-            return city.title() if city != "bengaluru" else "Bangalore"
-    return None
 
 
 def get_occasion_state(memory: dict) -> dict:
@@ -431,7 +381,7 @@ def extract_vibe_label(message: str) -> str | None:
     """Map free text to a canonical vibe pool label when possible."""
     from app.domain.chip_pools import get_chip_pool
     from app.domain.enums import StageId
-    from app.services.ui_hints import chips_mentioned_in_message
+    from app.services.ui.ui_hints import chips_mentioned_in_message
 
     pool = get_chip_pool(StageId.S4_VIBE.value)
     mentioned = chips_mentioned_in_message(message, pool)
@@ -490,5 +440,176 @@ def normalize_primary_vibe(value: str | None, message: str = "") -> str | None:
     return None
 
 
-# Note: looks_like_occasion_rehash() and extract_early_signals() removed
-# They were unused - AI handles these patterns via intent classification
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Response Sanitization & Validation (Consolidated)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.domain.enums import StageDecisionType, StageId
+from app.services.session.memory_service import VALID_STALE
+
+VALID_STAGE_IDS = {s.value for s in StageId}
+VALID_DECISION_TYPES = {d.value for d in StageDecisionType}
+REQUIRED_FIELDS = {"plannerReply", "memoryPatch", "stageDecision", "staleSections", "openQuestions", "suggestions"}
+REQUIRED_STAGE_DECISION_FIELDS = {"type", "stage"}
+
+_STAGE_ALIASES: list[tuple[str, str]] = [
+    ("personality", StageId.S3_PERSONALITY.value),
+    ("names", StageId.S1_NAMES.value),
+    ("s1", StageId.S1_NAMES.value),
+    ("basics", StageId.S2_BASICS.value),
+    ("s2", StageId.S2_BASICS.value),
+    ("vibe", StageId.S4_VIBE.value),
+    ("s4", StageId.S4_VIBE.value),
+    ("brief", StageId.S5_BRIEF.value),
+    ("s5", StageId.S5_BRIEF.value),
+    ("direction", StageId.S6_DIRECTIONS.value),
+    ("s6", StageId.S6_DIRECTIONS.value),
+    ("events", StageId.S7_EVENTS.value),
+    ("guest", StageId.S8_GUESTS.value),
+    ("budget", StageId.S9_BUDGET.value),
+    ("vendor", StageId.S10_VENDORS.value),
+    ("summary", StageId.S11_SUMMARY.value),
+]
+
+
+def _normalize_stage_id(raw_stage: str, current_stage: str) -> str:
+    if raw_stage in VALID_STAGE_IDS:
+        return raw_stage
+    raw_l = (raw_stage or "").lower()
+    for needle, stage_id in _STAGE_ALIASES:
+        if needle in raw_l:
+            return stage_id
+    return current_stage
+
+
+def _sanitize_memory_patch_schema(patch: dict) -> dict:
+    """Hoisting and nesting of memory patch fields."""
+    if not patch:
+        return patch
+
+    patch = dict(patch)
+
+    occasion = dict(patch.get("occasion") or {})
+    for key in (
+        "place", "locationPreference", "settingPreference",
+        "datePreference", "seasonPreference", "destinationMode", "isConfirmed",
+    ):
+        if key in patch and key != "occasion":
+            val = patch.pop(key)
+            if val is not None and val != "":
+                occasion[key] = val
+    if occasion:
+        patch["occasion"] = sanitize_timing_fields(occasion)
+
+    logistics = dict(patch.get("logistics") or {})
+    for key in ("events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"):
+        if key in patch:
+            logistics[key] = patch.pop(key)
+    if logistics:
+        patch["logistics"] = logistics
+
+    return patch
+
+
+def sanitize_ai_response(raw: dict, current_stage: str) -> dict:
+    """Sanitize AI structured output prior to schema validation."""
+    raw = dict(raw)
+    if "suggestions" not in raw or raw["suggestions"] is None:
+        raw["suggestions"] = []
+    if "staleSections" not in raw or raw["staleSections"] is None:
+        raw["staleSections"] = []
+    if "openQuestions" not in raw or raw["openQuestions"] is None:
+        raw["openQuestions"] = []
+    if not isinstance(raw.get("memoryPatch"), dict):
+        raw["memoryPatch"] = {}
+
+    sd = raw.get("stageDecision") if isinstance(raw.get("stageDecision"), dict) else {}
+    decision_type = sd.get("type", StageDecisionType.STAY.value)
+    if decision_type not in VALID_DECISION_TYPES:
+        decision_type = StageDecisionType.STAY.value
+    to_stage = _normalize_stage_id(sd.get("stage", current_stage), current_stage)
+    raw["stageDecision"] = {"type": decision_type, "stage": to_stage}
+
+    raw["memoryPatch"] = _sanitize_memory_patch_schema(raw.get("memoryPatch", {}))
+    return raw
+
+
+def validate_ai_response(raw: dict, stage: str) -> tuple[bool, str | None]:
+    """Validate AI response dict against stage contract."""
+    if not isinstance(raw, dict):
+        return False, "RESPONSE_NOT_DICT"
+
+    if "suggestions" not in raw:
+        raw["suggestions"] = []
+
+    missing = REQUIRED_FIELDS - raw.keys()
+    if missing:
+        return False, f"MISSING_FIELDS:{','.join(sorted(missing))}"
+
+    planner_reply = raw.get("plannerReply", "")
+    if not isinstance(planner_reply, str) or not planner_reply.strip():
+        return False, "EMPTY_PLANNER_REPLY"
+
+    if not isinstance(raw.get("memoryPatch"), dict):
+        return False, "INVALID_MEMORY_PATCH"
+
+    sd = raw.get("stageDecision", {})
+    if not isinstance(sd, dict):
+        return False, "INVALID_STAGE_DECISION"
+
+    sd_missing = REQUIRED_STAGE_DECISION_FIELDS - sd.keys()
+    if sd_missing:
+        return False, f"MISSING_STAGE_DECISION_FIELDS:{','.join(sorted(sd_missing))}"
+
+    if sd.get("type") not in VALID_DECISION_TYPES:
+        return False, f"INVALID_DECISION_TYPE:{sd.get('type')}"
+
+    if sd.get("stage") not in VALID_STAGE_IDS:
+        return False, f"INVALID_STAGE_ID:{sd.get('stage')}"
+
+    stale = raw.get("staleSections", [])
+    if not isinstance(stale, list):
+        return False, "INVALID_STALE_SECTIONS"
+    invalid_stale = [s for s in stale if s not in VALID_STALE]
+    if invalid_stale:
+        return False, f"UNKNOWN_STALE_SECTIONS:{','.join(invalid_stale)}"
+
+    if not isinstance(raw.get("openQuestions"), list):
+        return False, "INVALID_OPEN_QUESTIONS"
+
+    suggestions = raw.get("suggestions", [])
+    if suggestions is None:
+        suggestions = []
+    if not isinstance(suggestions, list):
+        return False, "INVALID_SUGGESTIONS"
+    raw["suggestions"] = suggestions
+
+    return True, None
+
+
+def validate_synthesis_response(raw: dict, synthesis_type: str) -> tuple[bool, str | None]:
+    """Validate AI response for synthesis requests."""
+    is_valid, err = validate_ai_response(raw, f"synthesis_{synthesis_type}")
+    if not is_valid:
+        return False, err
+
+    if synthesis_type == "brief":
+        if not raw.get("briefText", "").strip():
+            return False, "EMPTY_BRIEF_TEXT"
+
+    elif synthesis_type == "direction":
+        options = raw.get("directionOptions", [])
+        if not isinstance(options, list) or len(options) == 0:
+            return False, "EMPTY_DIRECTION_OPTIONS"
+        for opt in options:
+            if not isinstance(opt, dict):
+                return False, "INVALID_DIRECTION_OPTION"
+            for req in ("id", "name", "rankOrder", "reasonText"):
+                if not opt.get(req):
+                    return False, f"DIRECTION_OPTION_MISSING:{req}"
+
+    elif synthesis_type == "summary":
+        if not raw.get("summaryText", "").strip():
+            return False, "EMPTY_SUMMARY_TEXT"
+
+    return True, None

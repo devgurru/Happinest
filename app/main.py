@@ -46,5 +46,10 @@ async def health_check():
         "llmProvider": settings.llm_provider,
         "model": settings.active_chat_model,
         "embeddingProvider": settings.EMBEDDING_PROVIDER,
-        "embeddingModel": settings.OLLAMA_EMBEDDING_MODEL,
+        "embeddingModel": (
+            settings.OPENAI_EMBEDDING_MODEL
+            if (settings.EMBEDDING_PROVIDER or "").strip().lower() == "openai"
+            else settings.OLLAMA_EMBEDDING_MODEL
+        ),
     }
+

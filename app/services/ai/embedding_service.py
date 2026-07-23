@@ -13,17 +13,50 @@ from app.models.event_site import EventSite
 
 
 async def embed_text(text_input: str) -> list[float]:
-    """Call Ollama nomic-embed-text and return the embedding vector."""
-    url = f"{settings.OLLAMA_BASE_URL}/api/embeddings"
-    payload = {
-        "model": settings.OLLAMA_EMBEDDING_MODEL,
-        "prompt": text_input,
-    }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["embedding"]
+    """
+    Generate embedding vector for text_input.
+    Supports provider = 'ollama' (nomic-embed-text) or provider = 'openai' (text-embedding-3-small/large).
+    """
+    provider = (settings.EMBEDDING_PROVIDER or "ollama").strip().lower()
+
+    if provider == "openai":
+        api_key = (settings.OPENAI_API_KEY or "").strip()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is not set in environment (.env)")
+        base_url = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+        url = f"{base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        model_name = settings.OPENAI_EMBEDDING_MODEL or "text-embedding-3-small"
+        payload = {
+            "model": model_name,
+            "input": text_input,
+        }
+        # OpenAI text-embedding-3 models support dimensions=768 matching pgvector Vector(768)
+        if "text-embedding-3" in model_name.lower():
+            payload["dimensions"] = 768
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["data"][0]["embedding"]
+    else:
+        # Default Ollama provider
+        base_url = (settings.OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
+        url = f"{base_url}/api/embeddings"
+        payload = {
+            "model": settings.OLLAMA_EMBEDDING_MODEL or "nomic-embed-text",
+            "prompt": text_input,
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["embedding"]
+
 
 
 def build_memory_search_text(memory: dict) -> str:
@@ -84,6 +117,7 @@ async def find_matching_event_sites(
     sql = text(
         """
         SELECT id, slug, name, site_type, short_description, profile_json,
+               hero_image_url, gallery_json, seed_version, is_active,
                1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM event_sites
         WHERE is_active = true AND embedding IS NOT NULL
@@ -110,6 +144,10 @@ async def find_matching_event_sites(
                 "site_type": s.site_type,
                 "short_description": s.short_description,
                 "profile_json": s.profile_json,
+                "hero_image_url": s.hero_image_url,
+                "gallery_json": s.gallery_json,
+                "seed_version": s.seed_version,
+                "is_active": s.is_active,
                 "similarity": None,
             }
             for s in sites

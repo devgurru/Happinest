@@ -300,6 +300,49 @@ async def call_llm(
     raise last_error or AIGatewayError("UNKNOWN", "Unknown AI gateway error")
 
 
+def _parse_vision_response(raw_text: str) -> dict:
+    """
+    Extract JSON or parse rich prose from vision model into structured visual signals.
+    """
+    try:
+        return _extract_json(raw_text)
+    except Exception:
+        text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+        summary = text[:250].strip()
+
+        # Extract color hints
+        colors = []
+        for c in ["red", "gold", "pink", "blush", "white", "ivory", "pastel", "green", "blue", "yellow", "maroon", "burgundy"]:
+            if re.search(r"\b" + c + r"\b", text, re.IGNORECASE):
+                colors.append(c)
+
+        # Extract venue/setting
+        venue = ""
+        for v in ["banquet hall", "palace", "garden", "beach", "rooftop", "haveli", "farmhouse", "resort", "temple"]:
+            if v in text.lower():
+                venue = v
+                break
+
+        setting = "outdoor" if "outdoor" in text.lower() else ("indoor" if "indoor" in text.lower() else "")
+
+        # Extract style keywords
+        styles = []
+        for s in ["grand", "opulent", "romantic", "floral", "minimalist", "royal", "rustic", "traditional", "modern"]:
+            if s in text.lower():
+                styles.append(s.capitalize())
+
+        return {
+            "visualSignals": {
+                "colorPalette": colors[:5],
+                "venueType": venue,
+                "settingType": setting,
+                "styleKeywords": styles[:5],
+                "summary": summary,
+            },
+            "plannerNote": f"I see your inspiration image — {summary[:180]}...",
+        }
+
+
 async def call_vision_llm(
     text_prompt: str,
     image_b64_list: list[str],
@@ -320,7 +363,6 @@ async def call_vision_llm(
     # Build multimodal message: text + image_url blocks (base64 data URIs)
     content_parts: list[dict] = [{"type": "text", "text": text_prompt}]
     for b64 in image_b64_list[:3]:
-        # Accept both raw base64 and data URI strings
         if b64.startswith("data:"):
             data_uri = b64
         else:
@@ -339,18 +381,34 @@ async def call_vision_llm(
         label = "Groq Vision" if provider == "groq" else "Grok Vision"
         t0 = time.monotonic()
         try:
-            parsed = await _call_openai_compatible(
-                label=label,
-                error_prefix=error_prefix,
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                messages=messages,
-                telemetry=telemetry,
-                prefer_json_object=False,  # Vision models may not support response_format
-            )
+            if not api_key.strip():
+                raise AIGatewayError(code=f"{error_prefix}_MISSING_KEY", message="Missing API key")
+            url = f"{base_url.rstrip('/')}/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
+            payload = {"model": model, "messages": messages, "temperature": 0.3, "stream": False}
+
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+
+            telemetry["http_status"] = resp.status_code
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+
+            if resp.status_code != 200:
+                raise AIGatewayError(
+                    code=f"{error_prefix}_HTTP_ERROR",
+                    message=_openai_compatible_error_message(resp, label),
+                    http_status=resp.status_code,
+                )
+
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                raise AIGatewayError(code=f"{error_prefix}_EMPTY", message="Empty choices")
+
+            raw_text = (choices[0].get("message") or {}).get("content") or ""
+            parsed = _parse_vision_response(raw_text)
             return parsed, telemetry
+
         except Exception as e:
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
             if isinstance(e, AIGatewayError):
@@ -359,6 +417,7 @@ async def call_vision_llm(
                 code=f"{error_prefix}_FAILED",
                 message=str(e),
             ) from e
+
     else:
         # Ollama — attempt multimodal; fall back gracefully if model doesn't support it
         t0 = time.monotonic()

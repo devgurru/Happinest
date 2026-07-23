@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.ai_gateway import AIGatewayError, call_vision_llm
+from app.services.ai.ai_gateway import AIGatewayError, call_vision_llm
 
 # ---------------------------------------------------------------------------
 # Extraction prompt

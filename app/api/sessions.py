@@ -12,9 +12,9 @@ from app.schemas.planner import (
     PlannerNotesView, SessionSummary, StageDecisionSchema,
     normalize_suggestions, SelectedChipsView,
 )
-from app.services.memory_service import MemoryService
-from app.services.orchestrator import process_s1_names
-from app.services.session_service import SessionService
+from app.services.session.memory_service import MemoryService
+from app.graph.wedding_graph import process_s1_names
+from app.services.session.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 

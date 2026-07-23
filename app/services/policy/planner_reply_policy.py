@@ -18,7 +18,7 @@ def _fallback_question(stage: str, memory: dict) -> str:
     Keep it generic to avoid contradicting agent's intended flow.
     """
     if stage == StageId.S2_BASICS.value:
-        from app.services.text_extract import get_occasion_state
+        from app.utils.validators import get_occasion_state
         state = get_occasion_state(memory)
         if state["has_place"] and not state["has_time"]:
             return f"{state['place']} — roughly which month or season?"
@@ -68,7 +68,7 @@ def align_planner_reply(
     reply = (ai_reply or "").strip()
     landing = to_stage or from_stage
 
-    # If agent provided a reply, use it as-is
+    # If agent provided a reply, trust it as-is
     if reply:
         # REANCHOR: prepend correction acknowledgment if not already present
         if (decision_type == StageDecisionType.REANCHOR.value or correction) and correction_ack:

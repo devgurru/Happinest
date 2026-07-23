@@ -1,6 +1,8 @@
 Classify this wedding-planner turn. Return ONLY JSON.
 
 Current stage: $stage
+Current date context: $current_date
+Stage goal: $stage_goal
 Couple: $client_names
 Slim memory:
 $memory_json
