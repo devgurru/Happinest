@@ -52,10 +52,13 @@ class Settings(BaseSettings):
     # Vision model — used for image analysis (multimodal)
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 
-    # Embeddings — keep local Ollama by default (pgvector dims = nomic-embed-text)
-    # Direction matching depends on this; do not switch casually.
+    # Embeddings — supports "ollama" (nomic-embed-text) or "openai" (text-embedding-3-small)
     EMBEDDING_PROVIDER: str = "ollama"
     OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+
 
     # App
     DEBUG: bool = False
