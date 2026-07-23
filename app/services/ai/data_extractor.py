@@ -185,8 +185,12 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) 
                 try:
                     if is_past_date(date_pref):
                         occasion.pop("datePreference", None)
+                        val_notes = raw.setdefault("validationNotes", {})
+                        val_notes["isPastDate"] = True
+                        val_notes["rejectedDate"] = date_pref
                 except Exception:
                     pass  # Keep date if validator fails — backend safe default
+
 
             # Copy resolved country from validationNotes → occasion.country
             validation_notes = raw.get("validationNotes") or {}

@@ -125,28 +125,30 @@ def is_concrete_timing(occasion: dict) -> bool:
         # Reject past dates — a wedding cannot be in the past
         if is_past_date(date):
             return False
-        if any(m in date for m in MONTHS):
+        if any(m in date for m in MONTHS) or re.search(r"\b20\d{2}\b", date):
             return True
-        if re.fullmatch(r"\d{4}", date):
-            return False
 
+    # Bare season name without year/month (e.g. "Winter", "Summer") is incomplete for S2
     if season:
         if any(vague in season for vague in VAGUE_TIMING):
             return False
-        if any(s == season or s in season for s in VALID_SEASONS):
+        has_year = bool(re.search(r"\b20\d{2}\b", season))
+        has_month = any(m in season for m in MONTHS)
+        if (has_year or has_month) and not is_past_date(season):
             return True
 
     return False
 
 
+
 def resolve_relative_date(date_preference: str) -> str:
     """
-    Resolve relative timing expressions like 'June next year', 'next year', 'in June', 'next summer'.
-    Example (when today is July 2026):
-      "june next year" -> "June 2027"
-      "next year" -> "2027"
-      "june" -> "June 2027" (since June < July in 2026)
-      "december" -> "December 2026" (since December > July)
+    Resolve relative timing expressions & preserve exact day/month/year dates.
+    Examples:
+      "12 june 2028" -> "12 June 2028"
+      "June 12, 2028" -> "12 June 2028"
+      "june next year" -> "June 2027" (when today is July 2026)
+      "june" -> "June 2027"
     """
     if not date_preference or not isinstance(date_preference, str):
         return ""
@@ -165,24 +167,36 @@ def resolve_relative_date(date_preference: str) -> str:
             month_idx = idx
             break
 
+    # Find day (e.g. "12", "12th", "1st", "31")
+    day_val = None
+    text_no_year = re.sub(r"\b20\d{2}\b", "", text)
+    day_match = re.search(r"\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b", text_no_year, re.I)
+    if day_match:
+        day_val = int(day_match.group(1))
+
     is_next_year_mentioned = any(kw in low for kw in ("next year", "coming year", "following year"))
 
-    # Explicit 4-digit year already present (e.g. "June 2027")
+    # Explicit 4-digit year already present (e.g. "2028")
     year_match = re.search(r"\b(20\d{2})\b", text)
     if year_match:
         year_val = year_match.group(1)
+        if found_month and day_val:
+            return f"{day_val} {found_month} {year_val}"
         if found_month:
             return f"{found_month} {year_val}"
         return year_val
 
     if is_next_year_mentioned:
+        if found_month and day_val:
+            return f"{day_val} {found_month} {next_year}"
         if found_month:
             return f"{found_month} {next_year}"
         return str(next_year)
 
     if found_month and month_idx:
-        # If month is earlier than or equal to current month, it refers to next year
         target_year = next_year if month_idx <= today.month else current_year
+        if day_val:
+            return f"{day_val} {found_month} {target_year}"
         return f"{found_month} {target_year}"
 
     return text
@@ -193,34 +207,15 @@ def sanitize_timing_fields(occasion: dict) -> dict:
     occ = dict(occasion)
     raw_date = (occ.get("datePreference") or "").strip()
 
-    # Resolve relative dates (e.g. "june next year" -> "June 2027", "june" -> "June 2027")
+    # Resolve relative dates & preserve exact date strings
     if raw_date:
         occ["datePreference"] = resolve_relative_date(raw_date)
 
     date = (occ.get("datePreference") or "").strip().lower()
     season = (occ.get("seasonPreference") or "").strip().lower()
 
-    if date and (any(v in date for v in VAGUE_TIMING) or not any(m in date for m in MONTHS)):
-        # Try to extract month from the date string
-        found_month = None
-        for month_name in MONTHS:
-            if month_name in date:
-                found_month = month_name
-                break
-        if found_month:
-            # Extract year if present
-            year_match = re.search(r"\b(20\d{2})\b", occ.get("datePreference", ""))
-            if year_match:
-                occ["datePreference"] = f"{found_month.title()} {year_match.group(1)}"
-            else:
-                occ["datePreference"] = found_month.title()
-        else:
-            # Check if it's a year-only
-            year_match = re.search(r"\b(202[6-9]|20[3-9]\d)\b", occ.get("datePreference", ""))
-            if year_match:
-                occ["datePreference"] = year_match.group(1)
-            else:
-                occ["datePreference"] = ""
+    if date and any(v in date for v in VAGUE_TIMING):
+        occ["datePreference"] = ""
 
     # Strip past dates — never save a past wedding date to memory
     if occ.get("datePreference") and is_past_date(occ["datePreference"]):
@@ -229,6 +224,7 @@ def sanitize_timing_fields(occasion: dict) -> dict:
         occ["seasonPreference"] = ""
     if season and any(v in season for v in VAGUE_TIMING) and not any(s in season for s in VALID_SEASONS):
         occ["seasonPreference"] = ""
+
 
     # Don't let vibe/culture words pollute place or setting
     place = (occ.get("place") or "").strip().lower()

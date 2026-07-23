@@ -212,6 +212,8 @@ def build_response_planner_prompt(
     # Build human-readable status line
     if ctx.stage_status == "complete":
         status_str = f"COMPLETE → advancing to {ctx.next_stage or 'next stage'}"
+    elif ctx.stage_status == "past_date_rejected":
+        status_str = f"PAST DATE REJECTED: User mentioned '{ctx.rejected_date}' which is in the past"
     elif ctx.stage_status == "needs_early_signal_confirm":
         status_str = "FIRST TURN ON STAGE — early signals need confirmation"
     elif ctx.stage_status == "meta":
@@ -222,10 +224,17 @@ def build_response_planner_prompt(
         status_str = f"INCOMPLETE — still collecting data"
 
     # Build missing fields line (only when staying with specific missing fields)
-    if ctx.missing_fields and ctx.stage_status == "incomplete":
+    if ctx.stage_status == "past_date_rejected":
+        missing_line = (
+            f"IMPORTANT RULE: User mentioned '{ctx.rejected_date or 'a past date'}', which is in the past (today is {_date.today().strftime('%B %Y')}). "
+            f"Politely tell the couple that this date has already passed. Ask them to choose a future month and year (e.g., June 2027) or a season (e.g. Winter 2026/2027). "
+            f"DO NOT confirm, accept, or save the past date!"
+        )
+    elif ctx.missing_fields and ctx.stage_status in ("incomplete", "reanchor"):
         missing_line = f"Ask ONLY for: {', '.join(ctx.missing_fields)}"
     else:
         missing_line = ""
+
 
     # Early signal line
     early_signal_line = ""

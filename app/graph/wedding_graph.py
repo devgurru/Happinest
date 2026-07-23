@@ -813,12 +813,23 @@ async def process_conversation_turn(
             "type": StageDecisionType.REQUEST_CLARIFICATION.value,
             "stage": stage,
         }
+        if not (ai_result.get("plannerReply") or "").strip():
+            ai_result["plannerReply"] = (
+                "I didn't quite catch that! As your wedding planner, I'm here to assist you with all your wedding arrangements. "
+                "Could you please share your preference for this stage?"
+            )
     elif meta_intent in ("help", "more_suggestions"):
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
             "type": StageDecisionType.STAY.value,
             "stage": stage,
         }
+        if not (ai_result.get("plannerReply") or "").strip():
+            ai_result["plannerReply"] = (
+                "I'm Happinest, your personal AI wedding planner! I'm here to help you design and organize your dream wedding. "
+                "How can I assist you with your plans?"
+            )
+
     else:
         # Override AI's stageDecision with context builder's authoritative decision.
         # ctx.stage_decision was computed on real committed memory after extraction —
@@ -849,9 +860,19 @@ async def process_conversation_turn(
     additional_patch: dict = {}
 
     # Carry over AI patches for fields NOT already committed by extraction
+    from app.utils.validators import is_past_date
     for _k, _v in ai_patch.items():
         if _k not in extraction_patch and _k != "earlySignals":
-            additional_patch[_k] = _v
+            if _k == "occasion" and isinstance(_v, dict):
+                _v_copy = dict(_v)
+                _dp = (_v_copy.get("datePreference") or "").strip()
+                if _dp and is_past_date(_dp):
+                    _v_copy.pop("datePreference", None)
+                if _v_copy:
+                    additional_patch[_k] = _v_copy
+            else:
+                additional_patch[_k] = _v
+
 
     # Merge earlySignals: extraction early signals + any AI early signals
     if meta_intent not in ("help", "more_suggestions", "gibberish"):
@@ -932,11 +953,20 @@ async def process_conversation_turn(
     )
 
     # ── Resolve Final Stage ────────────────────────────────────────────────────
-    # Memory is now committed and updated. Check stage completeness first:
-    # If the current stage is complete in canonical memory (e.g. S2 has place + date),
-    # the backend MUST advance to next_stage. An upstream name correction must NOT
-    # lock a complete stage at reanchor/s2_basics.
-    if StagePolicy.is_stage_complete(stage, memory) and not open_questions:
+    sd = ai_result.get("stageDecision") or ctx.stage_decision
+    ai_decision_type = sd.get("type", StageDecisionType.STAY.value)
+    ai_to_stage = sd.get("stage", stage)
+
+    if extraction.is_meta():
+        # Meta turns (help / gibberish / more_suggestions) MUST STAY on current stage
+        final_decision_type = (
+            StageDecisionType.REQUEST_CLARIFICATION.value
+            if meta_intent == "gibberish"
+            else StageDecisionType.STAY.value
+        )
+        final_stage = stage
+        _reason = f"meta_turn_{meta_intent}"
+    elif StagePolicy.is_stage_complete(stage, memory) and not open_questions:
         try:
             next_s = StageId(stage).next_stage()
             final_stage = next_s.value if next_s else stage

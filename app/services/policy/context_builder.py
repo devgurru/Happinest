@@ -44,6 +44,7 @@ class TurnContext:
     next_stage: str | None      # set when advancing
     stage_decision: dict        # ready-to-use stageDecision for the prompt
     confirmed_patch_json: str   # json.dumps of confirmed_data for the prompt
+    rejected_date: str = ""     # populated when a past date was rejected this turn
 
     def is_advancing(self) -> bool:
         return self.decision == "advance"
@@ -212,8 +213,12 @@ def build_turn_context(
     missing = _get_missing_fields(stage, scratch)
     stage_dec = {"type": StageDecisionType.STAY.value, "stage": stage}
 
+    is_past_date_rejected = bool(extraction.validation_notes.get("isPastDate"))
+    rejected_date = str(extraction.validation_notes.get("rejectedDate") or "")
+    stage_status = "past_date_rejected" if is_past_date_rejected else "incomplete"
+
     return TurnContext(
-        stage_status="incomplete",
+        stage_status=stage_status,
         decision=StageDecisionType.STAY.value,
         meta_intent=meta_intent,
         confirmed_data=extraction.validated_patch,
@@ -225,7 +230,9 @@ def build_turn_context(
         next_stage=None,
         stage_decision=stage_dec,
         confirmed_patch_json=json.dumps(extraction.validated_patch, indent=2),
+        rejected_date=rejected_date,
     )
+
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -40,12 +40,12 @@ $stage_extraction_rules
 
 ## metaIntent — classify into exactly one:
 - "normal": answering the current stage question with usable content
-- "help": asking what a stage/chip/term means, how to answer, what to do next, asking for examples
+- "help": asking who you are ("who are you", "what do you do"), greetings ("how are you", "hello", "hi"), asking what a stage/chip/term means, asking how to answer, asking for examples or assistance
 - "more_suggestions": asking for more/different/alternative chip ideas (e.g. "give me more options", "something else")
 - "clarification": vague or incomplete — some content but nothing concretely extractable for this stage
 - "correction": explicitly changing a confirmed earlier answer (e.g. "actually I meant Delhi not Goa")
   → ALSO valid when correcting names while providing stage data (mixed turn)
-- "gibberish": random keyboard mash / completely unintelligible nonsense only
+- "gibberish": random keyboard mash / completely unintelligible nonsense only (e.g. "adkjaldjalsf", "ksdjf", "asdfghjk")
 
 ## User message
 "$user_message"

@@ -62,14 +62,13 @@ Extract into validatedPatch.occasion (only fields that are mentioned):
   → In validationNotes.resolvedCountry: identify the country
     Examples: "Lahore Fort" → Pakistan, "Delhi" → India, "Dubai" → UAE, "Goa" → India
   → In validationNotes.isValidLocation: false ONLY for clearly fictional/impossible places
-- datePreference: future month+year — MUST resolve relative references to concrete month+year
+- datePreference: future date (day+month+year, month+year, or year) — MUST preserve exact day/month when provided
   → TODAY IS: July 2026
+  → "12 June 2028" → "12 June 2028"  (preserve exact day, month, and year)
+  → "June 12, 2028" → "12 June 2028"
   → "next year June" → "June 2027"  (next year from July 2026 = 2027)
-  → "next year December" → "December 2027"
   → "this December" → "December 2026"
-  → "June 2027" → "June 2027"  (already concrete, use as-is)
   → If resolved date is before July 2026: set validationNotes.isPastDate=true, exclude from patch
-  → "around June next year" / "June of next year" → "June 2027"
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
   → Do NOT put datePreference content here
 - settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
