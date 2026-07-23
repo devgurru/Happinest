@@ -1042,7 +1042,7 @@ async def process_conversation_turn(
             place = (memory.get("occasion") or {}).get("place") or "your celebration"
             dir_res["plannerReply"] = _build_direction_planner_reply(opts, place, correction_ack=ack)
             dir_res["staleSections"] = stale_sections
-            dir_res["memoryPatch"] = {**(dir_res.get("memoryPatch") or {}), **(patch or {})}
+            dir_res["memoryPatch"] = {**(dir_res.get("memoryPatch") or {}), **(combined_patch or {})}
             dir_res["stageDecision"] = {
                 "type": StageDecisionType.REANCHOR.value,
                 "stage": StageId.S6_DIRECTIONS.value,
@@ -1079,7 +1079,7 @@ async def process_conversation_turn(
             )
             brief_res["plannerReply"] = refreshed
             brief_res["staleSections"] = stale_sections
-            brief_res["memoryPatch"] = {**(brief_res.get("memoryPatch") or {}), **(patch or {})}
+            brief_res["memoryPatch"] = {**(brief_res.get("memoryPatch") or {}), **(combined_patch or {})}
             brief_res["stageDecision"] = {"type": StageDecisionType.REANCHOR.value, "stage": stage}
             await SessionService.append_message(
                 db, session_id=session_id,

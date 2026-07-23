@@ -17,6 +17,7 @@ from app.models.session_memory_version import SessionMemoryVersion
 
 # Invalidation rules (from doc 05)
 _INVALIDATION_MAP: dict[str, list[str]] = {
+    "identity":           ["brief", "direction", "summary"],
     "occasion":           ["brief", "direction", "budget", "vendors", "summary"],
     "personality":        ["brief", "direction", "summary"],
     "vibe":               ["brief", "direction", "budget", "summary"],
@@ -24,6 +25,7 @@ _INVALIDATION_MAP: dict[str, list[str]] = {
     "logistics.guestCounts": ["budget", "vendors", "summary"],
     "logistics.budget":   ["vendors", "summary"],
 }
+
 
 VALID_STALE = {s.value for s in StaleSectionId}
 

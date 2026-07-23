@@ -11,8 +11,10 @@ Synthesis prompts (unchanged):
 """
 from __future__ import annotations
 
+import copy
 import json
 import string
+
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -282,8 +284,17 @@ def build_response_planner_prompt(
 
 def build_brief_synthesis_prompt(memory: dict, version_no: int) -> list[dict]:
     template = _load_template("brief_synthesis")
+    prompt_memory = copy.deepcopy(memory)
+    # Clear stale brief text so LLM generates a 100% fresh brief from current canonical fields
+    prompt_memory["brief"] = {
+        "text": "",
+        "quote": "",
+        "status": "in_progress",
+        "version": version_no,
+        "generatedFromMemoryVersion": version_no,
+    }
     return _with_json_prefill(template.safe_substitute(
-        memory_json=json.dumps(memory, indent=2),
+        memory_json=json.dumps(prompt_memory, indent=2),
         version_no=version_no,
     ))
 
@@ -295,6 +306,14 @@ def build_direction_synthesis_prompt(
     version_no: int,
 ) -> list[dict]:
     template = _load_template("direction_synthesis")
+    prompt_memory = copy.deepcopy(memory)
+    prompt_memory["direction"] = {
+        "status": "in_progress",
+        "options": [],
+        "version": version_no,
+        "selectedDirectionId": "",
+        "generatedFromMemoryVersion": version_no,
+    }
     candidates_text = ""
     for i, site in enumerate(candidate_sites, 1):
         p = site.get("profile_json", {})
@@ -306,7 +325,7 @@ def build_direction_synthesis_prompt(
             f"   Vibe: {', '.join(p.get('vibeTags', []))}\n"
         )
     return _with_json_prefill(template.safe_substitute(
-        memory_json=json.dumps(memory, indent=2),
+        memory_json=json.dumps(prompt_memory, indent=2),
         brief_text=brief_text,
         candidate_sites=candidates_text.strip(),
         version_no=version_no,
@@ -315,7 +334,15 @@ def build_direction_synthesis_prompt(
 
 def build_final_summary_prompt(memory: dict, version_no: int) -> list[dict]:
     template = _load_template("final_summary")
+    prompt_memory = copy.deepcopy(memory)
+    prompt_memory["summary"] = {
+        "text": "",
+        "status": "in_progress",
+        "version": version_no,
+        "generatedFromMemoryVersion": version_no,
+    }
     return _with_json_prefill(template.safe_substitute(
-        memory_json=json.dumps(memory, indent=2),
+        memory_json=json.dumps(prompt_memory, indent=2),
         version_no=version_no,
     ))
+

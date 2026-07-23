@@ -12,12 +12,13 @@ Write a brief that mirrors the Figma S5 confirmation screen:
 5. Do NOT say what you "will" build or "expect" — only what you understand they want
 6. Flag 1-2 genuine open questions if memory has gaps
 
-## Tone rules
+## Tone & Fact Rules
 - Reflective, not prescriptive: "They want…" / "What comes through is…"
-- Use their actual names
-- Reference their actual tags, vibe, place, date from memory
+- Use their actual names from identity in memory_json
+- STRICT DATE GROUNDING: Reference their EXACT datePreference, seasonPreference, and place from occasion in memory_json. NEVER write a year or season that contradicts memory_json (e.g. if datePreference is "2029", you MUST use 2029).
 - Under 200 words for briefText
 - The pull quote should feel like something the couple might have said
+
 
 ## JSON Response Contract
 {
