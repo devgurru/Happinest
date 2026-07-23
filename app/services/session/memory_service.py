@@ -129,6 +129,23 @@ class MemoryService:
             if legacy_key in new_memory and legacy_key != "occasion":
                 new_memory.pop(legacy_key, None)
 
+        # Sanitize direction.options in memory: store ONLY the user-selected direction option
+        dir_obj = new_memory.get("direction")
+        if isinstance(dir_obj, dict):
+            selected_id = (dir_obj.get("selectedDirectionId") or new_memory.get("committedSelections", {}).get("directionId") or "").strip()
+            opts = dir_obj.get("options") or []
+            if selected_id:
+                selected_opts = [o for o in opts if isinstance(o, dict) and o.get("id") == selected_id]
+                if not selected_opts:
+                    selected_name = dir_obj.get("selectedDirectionName") or new_memory.get("committedSelections", {}).get("directionName", "")
+                    selected_opts = [{"id": selected_id, "name": selected_name}]
+                dir_obj["options"] = selected_opts
+                if selected_opts and selected_opts[0].get("name"):
+                    dir_obj["selectedDirectionName"] = selected_opts[0]["name"]
+            else:
+                dir_obj["options"] = []
+
+
         # Compute stale sections
         new_stale = compute_stale_sections(patch, current.stale_sections)
         if extra_stale:

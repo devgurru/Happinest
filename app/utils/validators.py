@@ -145,10 +145,10 @@ def resolve_relative_date(date_preference: str) -> str:
     """
     Resolve relative timing expressions & preserve exact day/month/year dates.
     Examples:
+      "3 years after" -> "July 2029" (when today is July 2026)
+      "in 3 years" -> "July 2029"
       "12 june 2028" -> "12 June 2028"
-      "June 12, 2028" -> "12 June 2028"
-      "june next year" -> "June 2027" (when today is July 2026)
-      "june" -> "June 2027"
+      "june next year" -> "June 2027"
     """
     if not date_preference or not isinstance(date_preference, str):
         return ""
@@ -167,12 +167,24 @@ def resolve_relative_date(date_preference: str) -> str:
             month_idx = idx
             break
 
-    # Find day (e.g. "12", "12th", "1st", "31")
+    # Remove relative year offsets and 4-digit years before matching day
+    text_no_years = re.sub(r"\b\d+\s*years?\b|\b20\d{2}\b", "", text, flags=re.I)
     day_val = None
-    text_no_year = re.sub(r"\b20\d{2}\b", "", text)
-    day_match = re.search(r"\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b", text_no_year, re.I)
+    day_match = re.search(r"\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b", text_no_years, re.I)
     if day_match:
         day_val = int(day_match.group(1))
+
+    # Check relative year offsets (e.g. "3 years after", "in 3 years", "3 years from now")
+    rel_year_match = re.search(r"\b(\d+)\s*years?\b", low)
+    if rel_year_match:
+        offset = int(rel_year_match.group(1))
+        target_year = current_year + offset
+        if found_month and day_val:
+            return f"{day_val} {found_month} {target_year}"
+        if found_month:
+            return f"{found_month} {target_year}"
+        current_month_name = MONTHS[today.month - 1].title()
+        return f"{current_month_name} {target_year}"
 
     is_next_year_mentioned = any(kw in low for kw in ("next year", "coming year", "following year"))
 
@@ -200,6 +212,7 @@ def resolve_relative_date(date_preference: str) -> str:
         return f"{found_month} {target_year}"
 
     return text
+
 
 
 def sanitize_timing_fields(occasion: dict) -> dict:
