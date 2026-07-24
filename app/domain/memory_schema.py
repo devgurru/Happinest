@@ -205,7 +205,9 @@ def build_selected_chips(memory: dict, stage: str | None = None) -> dict:
     elif stage in ("s6_directions", StageId.S6_DIRECTIONS.value):
         return {"directionId": selected_id, "directionName": direction_name}
 
-    return full_chips
+    # Stages without stage-specific chips (s1_names, s2_basics, s5_brief, s8_guests, etc.)
+    return {}
+
 
 
 
