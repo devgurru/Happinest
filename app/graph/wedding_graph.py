@@ -74,20 +74,18 @@ def _make_error_response(
     error_code: str,
     message: str = "Something went wrong. Please try again.",
 ) -> dict:
-    """Standard error response — memory is never mutated on error."""
     return {
         "requestId": str(request_id),
         "sessionId": str(session_id),
         "responseSource": ResponseSource.ERROR.value,
         "plannerReply": message,
-        "memoryPatch": {},
         "updatedMemoryVersion": None,
-        "stageDecision": {"type": StageDecisionType.STAY.value, "stage": stage},
-        "staleSections": [],
+        "stageDecision": {"type": "stay", "stage": stage},
         "openQuestions": [],
         "suggestions": [],
         "selectedChips": build_selected_chips(memory),
         "plannerNotesView": build_planner_notes_view(memory),
+        "artifactContent": None,
         "errorCode": error_code,
     }
 
@@ -108,22 +106,33 @@ def _response_dict(
     artifact_content: dict | None = None,
     error_code: str | None = None,
 ) -> dict:
+    # Normalize suggestions to list of clean label strings
+    clean_suggs: list[str] = []
+    for item in (suggestions or []):
+        if isinstance(item, str) and item.strip():
+            if item.strip() not in clean_suggs:
+                clean_suggs.append(item.strip())
+        elif isinstance(item, dict):
+            lbl = item.get("label", "")
+            if isinstance(lbl, str) and lbl.strip() and lbl.strip() not in clean_suggs:
+                clean_suggs.append(lbl.strip())
+
+    stage_val = stage_decision.get("stage") if isinstance(stage_decision, dict) else None
     return {
         "requestId": str(request_id),
         "sessionId": str(session_id),
         "responseSource": response_source,
         "plannerReply": planner_reply,
-        "memoryPatch": memory_patch or {},
         "updatedMemoryVersion": updated_version,
         "stageDecision": stage_decision or {"type": "stay", "stage": "s2_basics"},
-        "staleSections": stale_sections or [],
         "openQuestions": open_questions or [],
-        "suggestions": suggestions or [],
-        "selectedChips": build_selected_chips(memory),
+        "suggestions": clean_suggs,
+        "selectedChips": build_selected_chips(memory, stage=stage_val),
         "plannerNotesView": build_planner_notes_view(memory),
         "artifactContent": artifact_content,
         "errorCode": error_code,
     }
+
 
 
 def _is_direction_request(message: str) -> bool:
@@ -740,10 +749,13 @@ async def process_conversation_turn(
 
         try:
             ex_mem = await MemoryService.apply_patch(
-                db, session, extraction_patch, request_id=request_id,
+                db, session, extraction_patch,
+                request_id=request_id,
+                is_correction=(extraction.meta_intent == "correction"),
             )
             memory = ex_mem.memory_json
             version_no = ex_mem.version_no
+
         except Exception as _ep:
             import logging as _log
             _log.getLogger(__name__).warning("Extraction patch apply failed: %s", _ep)
@@ -899,7 +911,9 @@ async def process_conversation_turn(
             request_id=request_id,
             open_questions=open_questions,
             extra_stale=stale_sections,
+            is_correction=(meta_intent == "correction"),
         )
+
         memory = new_mem_version.memory_json
         updated_version = new_mem_version.version_no
         stale_sections = new_mem_version.stale_sections
@@ -1122,10 +1136,10 @@ async def process_conversation_turn(
         )
         suggestions = [
             s for s in suggestions
-            if isinstance(s, dict)
-            and s.get("label")
-            and not re.search(r"guestcount|_guests$|_estimate", str(s.get("label", "")), re.I)
+            if isinstance(s, str) and s.strip()
+            and not re.search(r"guestcount|_guests$|_estimate", s, re.I)
         ]
+
 
 
     correction_ack = ""

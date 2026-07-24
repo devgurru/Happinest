@@ -36,7 +36,12 @@ $stage_extraction_rules
    (says "yes" / "keep those" / "go with it" / "that's right" / "use those" / "sounds good" / "perfect")
    → extract earlySignals values INTO validatedPatch for this stage's canonical field.
 5. If user is explicitly changing an earlier answer → set correctedSection to the section name.
-6. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
+6. REMOVAL / DELETION RULE: When user asks to remove, drop, or delete an item (e.g. "remove Gourmet connoisseurs", "delete Haldi", "drop Beach vibe"):
+   → set metaIntent = "correction"
+   → set correctedSection = the target section (e.g. "personality", "vibe", "logistics")
+   → validatedPatch.[section] MUST contain the complete list of REMAINING items with the requested item REMOVED.
+7. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
+
 
 ## metaIntent — classify into exactly one:
 - "normal": answering the current stage question with usable content

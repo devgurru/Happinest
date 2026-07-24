@@ -50,7 +50,7 @@ _JUNK_TAG_PATTERNS = (
 )
 
 _VIBE_ALIASES: list[tuple[tuple[str, ...], str]] = [
-    (("big & festive", "big and festive", "big festive", "festive", "grand festive"), "Big & festive"),
+    (("big and festive", "big festive", "festive", "grand festive"), "Big and festive"),
     (("intimate", "small and intimate", "cozy intimate"), "Intimate"),
     (("family-led", "family led", "family first", "family-first"), "Family-led"),
     (("modern & sleek", "modern and sleek", "modern sleek", "sleek"), "Modern & sleek"),

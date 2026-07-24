@@ -120,17 +120,45 @@ def _contextual_chip_order(stage: str, memory: dict, pool: list[str]) -> list[st
     return [chip for _, chip in scored]
 
 
-def build_guest_count_suggestions(memory: dict) -> list[dict]:
+def _already_selected_chips_for_stage(display_stage: str, memory: dict) -> set[str]:
+    selected_set = set()
+    personality = memory.get("personality") or {}
+    vibe = memory.get("vibe") or {}
+    logistics = memory.get("logistics") or {}
+    early = memory.get("earlySignals") or {}
+    committed = memory.get("committedSelections") or {}
+
+    if display_stage == StageId.S3_PERSONALITY.value:
+        for t in (personality.get("tags") or []) + (early.get("personality") or []) + (committed.get("personality") or []):
+            if isinstance(t, str) and t.strip():
+                selected_set.add(t.strip().lower())
+    elif display_stage == StageId.S4_VIBE.value:
+        if primary := vibe.get("primaryVibe"):
+            selected_set.add(primary.strip().lower())
+        for s in (vibe.get("secondaryVibes") or []) + (early.get("vibe") or []) + (committed.get("vibe") or []):
+            if isinstance(s, str) and s.strip():
+                selected_set.add(s.strip().lower())
+    elif display_stage == StageId.S7_EVENTS.value:
+        for e in (logistics.get("events") or []) + (early.get("events") or []) + (committed.get("events") or []):
+            if isinstance(e, str) and e.strip():
+                selected_set.add(e.strip().lower())
+    elif display_stage == StageId.S10_VENDORS.value:
+        vendors = logistics.get("vendorPreferences") or {}
+        for cat in vendors.keys():
+            if isinstance(cat, str) and cat.strip():
+                selected_set.add(cat.strip().lower())
+
+    return selected_set
+
+
+def build_guest_count_suggestions(memory: dict) -> list[str]:
     """Suggest guest-count prompts only for events missing counts."""
     events = memory.get("logistics", {}).get("events") or []
     counts = memory.get("logistics", {}).get("guestCounts") or {}
-    suggestions: list[dict] = []
+    suggestions: list[str] = []
     for event in events:
         if not isinstance(counts.get(event), int) or counts.get(event, 0) <= 0:
-            suggestions.append({
-                "label": f"{event} — guest count?",
-                "category": "guests",
-            })
+            suggestions.append(f"{event} — guest count?")
     return suggestions[:6]
 
 
@@ -141,11 +169,11 @@ def build_ui_suggestions(
     *,
     for_stage: str | None = None,
     prefer_custom: bool = False,
-) -> list[dict]:
+) -> list[str]:
     """
-    Return normalized suggestion objects for the frontend chip UI.
+    Return clean string suggestions (labels) for the frontend chip UI.
     `for_stage` lets us attach chips for the stage we are advancing into.
-    `prefer_custom` (more_suggestions): keep AI-invented labels; do not refill only from pool.
+    Excludes any chip labels already selected in memory.
     """
     display_stage = for_stage or stage
 
@@ -154,12 +182,14 @@ def build_ui_suggestions(
         if guest_hints:
             return guest_hints
 
+    already_selected = _already_selected_chips_for_stage(display_stage, memory)
+
     if display_stage not in CHIP_STAGES:
-        return [{"label": label, "category": None} for label in _labels_from_ai(ai_suggestions)]
+        return [lbl for lbl in _labels_from_ai(ai_suggestions) if lbl.lower() not in already_selected]
 
     pool = _pool_for_stage(display_stage, memory)
     if not pool:
-        return [{"label": label, "category": None} for label in _labels_from_ai(ai_suggestions)]
+        return [lbl for lbl in _labels_from_ai(ai_suggestions) if lbl.lower() not in already_selected]
 
     pool_set = {c.lower(): c for c in pool}
     selected: list[str] = []
@@ -169,33 +199,31 @@ def build_ui_suggestions(
     )
 
     for label in _labels_from_ai(ai_suggestions):
-        canonical = pool_set.get(label.lower())
+        lbl_low = label.lower()
+        if lbl_low in already_selected:
+            continue
+        canonical = pool_set.get(lbl_low)
         if canonical:
-            if canonical not in selected:
+            if canonical.lower() not in {s.lower() for s in selected}:
                 selected.append(canonical)
-        elif allow_custom and 2 <= len(label) <= 40 and label not in selected:
-            # Chip pool is reference — keep agent-invented short labels
-            if label.lower() not in {s.lower() for s in selected}:
+        elif allow_custom and 2 <= len(label) <= 40:
+            if lbl_low not in {s.lower() for s in selected}:
                 selected.append(label)
         if prefer_custom and len(selected) >= 6:
             break
 
     if not prefer_custom or len(selected) < 3:
         for chip in _contextual_chip_order(display_stage, memory, pool):
-            if chip.lower() not in {s.lower() for s in selected}:
+            chip_low = chip.lower()
+            if chip_low in already_selected:
+                continue
+            if chip_low not in {s.lower() for s in selected}:
                 selected.append(chip)
             if len(selected) >= 6:
                 break
 
-    category = {
-        StageId.S3_PERSONALITY.value: "personality",
-        StageId.S4_VIBE.value: "vibe",
-        StageId.S7_EVENTS.value: "events",
-        StageId.S8_GUESTS.value: "guests",
-        StageId.S10_VENDORS.value: "vendors",
-    }.get(display_stage, "chip")
+    return selected[:6]
 
-    return [{"label": chip, "category": category} for chip in selected[:6]]
 
 
 def chips_mentioned_in_message(message: str, pool: list[str]) -> list[str]:
