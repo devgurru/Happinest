@@ -224,6 +224,27 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) 
                 vibe.pop("primaryVibe", None)
                 patch["vibe"] = vibe
 
+    # S8: sanitise guest counts against confirmed events
+    if stage == StageId.S8_GUESTS.value:
+        logistics = patch.get("logistics") or {}
+        if isinstance(logistics, dict):
+            counts = logistics.get("guestCounts") or {}
+            if isinstance(counts, dict):
+                cleaned_counts = {}
+                events_in_mem = (memory.get("logistics") or {}).get("events") or []
+                events_map = {str(e).lower(): e for e in events_in_mem}
+                for k, v in counts.items():
+                    try:
+                        val_int = int(float(str(v)))
+                        if val_int > 0:
+                            matched_ev = events_map.get(str(k).lower().strip(), str(k).strip().title())
+                            cleaned_counts[matched_ev] = val_int
+                    except (ValueError, TypeError):
+                        pass
+                if cleaned_counts:
+                    logistics["guestCounts"] = cleaned_counts
+                    patch["logistics"] = logistics
+
     # Remove empty nested dicts / empty lists from patch
     patch = _remove_empty(patch)
     return patch

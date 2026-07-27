@@ -70,13 +70,30 @@ def _extract_brief_artifact_if_present(stage: str, memory: dict, artifact_conten
     if artifact_content:
         return artifact_content
     stage_val = (stage or "").strip()
-    brief_data = (memory.get("brief") or {}) if isinstance(memory, dict) else {}
-    brief_text = (brief_data.get("text") or "").strip()
-    if brief_text and (stage_val == StageId.S5_BRIEF.value or brief_data.get("status") == "ready"):
-        return {
-            "briefText": brief_text,
-            "briefQuote": brief_data.get("quote") or "",
-        }
+    if stage_val == StageId.S5_BRIEF.value:
+        brief_data = (memory.get("brief") or {}) if isinstance(memory, dict) else {}
+        brief_text = (brief_data.get("text") or "").strip()
+        if brief_text:
+            return {
+                "briefText": brief_text,
+                "briefQuote": brief_data.get("quote") or "",
+            }
+    elif stage_val == StageId.S6_DIRECTIONS.value:
+        dir_data = (memory.get("direction") or {}) if isinstance(memory, dict) else {}
+        options = dir_data.get("options") or []
+        if options:
+            return {
+                "directionOptions": options,
+            }
+    elif stage_val == StageId.S8_GUESTS.value:
+        logistics = (memory.get("logistics") or {}) if isinstance(memory, dict) else {}
+        events = logistics.get("events") or []
+        counts = logistics.get("guestCounts") or {}
+        if events or counts:
+            return {
+                "events": events,
+                "guestCounts": counts,
+            }
     return None
 
 
@@ -152,17 +169,26 @@ def _response_dict(
 
 
 def _is_direction_request(message: str) -> bool:
-    msg = message.lower()
-    return any(p in msg for p in (
-        "show me direction", "show directions", "see direction",
-        "directions", "design direction",
-    ))
+    msg = (message or "").lower().strip()
+    keywords = (
+        "direction", "directions", "design direction", "show me direction",
+        "show directions", "see direction", "rethink", "something different",
+        "different option", "different options", "more option", "more options",
+        "other option", "other options", "another option", "another direction",
+        "new direction", "new options", "try something different",
+        "none of these", "don't work", "dont work", "change direction",
+    )
+    return any(k in msg for k in keywords)
 
 
-def _direction_options_from_sites(sites: list[dict]) -> list[dict]:
-    """Build S6 directionOptions from embedding matches — no LLM required."""
+def _direction_options_from_sites(sites: list[dict], offset: int = 0) -> list[dict]:
+    """Build S6 directionOptions from embedding matches — supports rank offset for rethink."""
     options = []
-    for i, site in enumerate(sites[:3], start=1):
+    selected_sites = sites[offset : offset + 3]
+    if not selected_sites:
+        selected_sites = sites[:3]
+
+    for i, site in enumerate(selected_sites, start=1):
         profile = site.get("profile_json") or {}
         slug = site.get("slug") or str(site.get("id") or f"option-{i}")
         name = site.get("name") or slug
@@ -189,6 +215,65 @@ def _direction_options_from_sites(sites: list[dict]) -> list[dict]:
             "vibeTags": profile.get("vibeTags") or [],
         })
     return options
+
+
+def seed_tentative_guest_counts(memory: dict) -> dict:
+    """Generate realistic tentative guest counts for confirmed events if not already present."""
+    if not isinstance(memory, dict):
+        return memory
+    logistics = dict(memory.get("logistics") or {})
+    events = logistics.get("events") or []
+    if not events:
+        return memory
+
+    counts = dict(logistics.get("guestCounts") or {})
+    pref_str = str((memory.get("occasion") or {}).get("guestCountPreference") or "")
+    import re
+    match = re.search(r'\b(\d+)\b', pref_str)
+    base_count = int(match.group(1)) if match else None
+
+    BENCHMARKS = {
+        "mehendi": 80,
+        "mehndi": 80,
+        "haldi": 60,
+        "mayun": 60,
+        "sangeet": 250,
+        "cocktail": 200,
+        "musical night": 200,
+        "wedding": 450,
+        "barat": 450,
+        "ceremony": 450,
+        "nikkah": 300,
+        "reception": 350,
+        "walima": 350,
+    }
+
+    updated = False
+    for ev in events:
+        if counts.get(ev) is None or not isinstance(counts.get(ev), (int, float)) or counts.get(ev, 0) <= 0:
+            ev_lower = str(ev).lower()
+            est = None
+            for key, val in BENCHMARKS.items():
+                if key in ev_lower:
+                    est = val
+                    break
+            if est is None:
+                est = 200
+
+            if base_count and base_count > 0:
+                if base_count < 200:
+                    est = min(est, base_count)
+                elif base_count > 1000:
+                    est = int(est * (base_count / 500))
+
+            counts[ev] = est
+            updated = True
+
+    if updated:
+        logistics["guestCounts"] = counts
+        memory["logistics"] = logistics
+
+    return memory
 
 
 def _summarize_correction_for_reply(
@@ -378,7 +463,7 @@ async def _execute_direction_from_embeddings(
     version_no = mem_version.version_no
 
     try:
-        candidates = await find_matching_event_sites(db, memory, top_k=6)
+        candidates = await find_matching_event_sites(db, memory, top_k=30)
     except Exception as e:
         await log_ai_turn(
             db, request_id, session_id, stage,
@@ -393,21 +478,46 @@ async def _execute_direction_from_embeddings(
             message=f"Could not match directions right now ({e}). Please try again.",
         )
 
-    options = _direction_options_from_sites(candidates)
+    direction_data = (memory.get("direction") or {}) if isinstance(memory, dict) else {}
+    existing_options = direction_data.get("options") or []
+    seen_ids = set(direction_data.get("seenOptionIds") or [])
+    for opt in existing_options:
+        if isinstance(opt, dict) and opt.get("id"):
+            seen_ids.add(opt["id"])
+
+    # Filter out candidate sites already shown to the user
+    unseen_candidates = [
+        c for c in candidates
+        if c.get("slug") not in seen_ids and str(c.get("id") or "") not in seen_ids
+    ]
+
+    is_rethink = len(seen_ids) > 0
+    if len(unseen_candidates) < 3:
+        unseen_candidates = candidates
+        seen_ids = set()
+
+    options = _direction_options_from_sites(unseen_candidates)
     if not options:
         return _make_error_response(
             request_id, session_id, stage, memory, "NO_DIRECTION_CANDIDATES",
             message="I couldn't find matching directions yet. Please try again shortly.",
         )
 
+    for opt in options:
+        seen_ids.add(opt["id"])
+
     response_source = ResponseSource.RULE.value
     place = (memory.get("occasion") or {}).get("place") or "your celebration"
-    planner_reply = _build_direction_planner_reply(options, place)
+    if is_rethink:
+        planner_reply = f"Here are alternative design direction concepts for your celebration in {place}:"
+    else:
+        planner_reply = _build_direction_planner_reply(options, place)
     telemetry: dict = {}
 
     patch = {
         "direction": {
             "options": options,
+            "seenOptionIds": list(seen_ids),
             "status": "ready",
             "selectedDirectionId": "",
         }
@@ -730,8 +840,8 @@ async def process_conversation_turn(
         for m in all_messages
     ]
 
-    # S5 direction shortcut (user explicitly asks for directions)
-    if stage == StageId.S5_BRIEF.value and _is_direction_request(user_message):
+    # S5 / S6 direction shortcut (user explicitly asks for directions or alternative directions)
+    if (stage == StageId.S5_BRIEF.value or stage == StageId.S6_DIRECTIONS.value) and _is_direction_request(user_message):
         await SessionService.append_message(
             db, session_id=session_id,
             role=MessageRole.CLIENT.value, content=user_message,
@@ -790,6 +900,14 @@ async def process_conversation_turn(
     # ── Phase 3: Context Building (pure Python) ───────────────────────────────
     # ctx now operates on the DB-committed memory (real state, not tentative)
     ctx = build_turn_context(stage, memory, extraction)
+
+    # Seed tentative guest counts if entering/on S8 and guestCounts is empty
+    if stage == StageId.S8_GUESTS.value or (ctx and ctx.stage_decision and ctx.stage_decision.get("stage") == StageId.S8_GUESTS.value):
+        memory_seeded = seed_tentative_guest_counts(memory)
+        if memory_seeded != memory:
+            new_mem = await MemoryService.apply_patch(db, session, memory_seeded.get("logistics") or {}, request_id=request_id)
+            memory = new_mem.memory_json
+            updated_version = new_mem.version_no
 
     # ── Phase 4: Response Planning (AI Call 2) ────────────────────────────────
     messages = build_response_planner_prompt(
