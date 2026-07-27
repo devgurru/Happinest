@@ -174,32 +174,36 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) 
     if not patch or not isinstance(patch, dict):
         return {}
 
-    # S2: validate dates and resolve country from validationNotes
-    if stage == StageId.S2_BASICS.value:
-        occasion = dict(patch.get("occasion") or {})
-        if isinstance(occasion, dict):
-            # Reject past dates
-            date_pref = occasion.get("datePreference") or ""
-            if date_pref:
-                from app.utils.validators import is_past_date
-                try:
-                    if is_past_date(date_pref):
-                        occasion.pop("datePreference", None)
-                        val_notes = raw.setdefault("validationNotes", {})
-                        val_notes["isPastDate"] = True
-                        val_notes["rejectedDate"] = date_pref
-                except Exception:
-                    pass  # Keep date if validator fails — backend safe default
+    # Validate occasion dates and resolve country across ALL stages
+    occasion = dict(patch.get("occasion") or {})
+    if occasion and isinstance(occasion, dict):
+        # Reject past dates
+        date_pref = occasion.get("datePreference") or ""
+        if date_pref:
+            from app.utils.validators import is_past_date
+            try:
+                if is_past_date(date_pref):
+                    occasion.pop("datePreference", None)
+                    val_notes = raw.setdefault("validationNotes", {})
+                    val_notes["isPastDate"] = True
+                    val_notes["rejectedDate"] = date_pref
+            except Exception:
+                pass  # Keep date if validator fails — backend safe default
 
+        # Resolve country from LLM validationNotes or city lookup helper
+        place = (occasion.get("place") or "").strip()
+        validation_notes = raw.get("validationNotes") or {}
+        resolved_country = (validation_notes.get("resolvedCountry") or "").strip()
 
-            # Copy resolved country from validationNotes → occasion.country
-            validation_notes = raw.get("validationNotes") or {}
-            resolved_country = (validation_notes.get("resolvedCountry") or "").strip()
-            if resolved_country and not occasion.get("country"):
-                occasion["country"] = resolved_country
+        from app.utils.validators import infer_country_from_place
+        inferred = infer_country_from_place(place)
+        country = resolved_country or inferred
 
-            if occasion:
-                patch["occasion"] = occasion
+        if country:
+            occasion["country"] = country
+
+        if occasion:
+            patch["occasion"] = occasion
 
     # S3: reject non-personality tags (cities, dates)
     if stage == StageId.S3_PERSONALITY.value:

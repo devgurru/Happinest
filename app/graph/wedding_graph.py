@@ -66,6 +66,20 @@ from app.services.ui.ui_hints import build_ui_suggestions
 # Response helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _extract_brief_artifact_if_present(stage: str, memory: dict, artifact_content: dict | None) -> dict | None:
+    if artifact_content:
+        return artifact_content
+    stage_val = (stage or "").strip()
+    brief_data = (memory.get("brief") or {}) if isinstance(memory, dict) else {}
+    brief_text = (brief_data.get("text") or "").strip()
+    if brief_text and (stage_val == StageId.S5_BRIEF.value or brief_data.get("status") == "ready"):
+        return {
+            "briefText": brief_text,
+            "briefQuote": brief_data.get("quote") or "",
+        }
+    return None
+
+
 def _make_error_response(
     request_id: uuid.UUID | str,
     session_id: uuid.UUID | str,
@@ -85,7 +99,7 @@ def _make_error_response(
         "suggestions": [],
         "selectedChips": build_selected_chips(memory),
         "plannerNotesView": build_planner_notes_view(memory),
-        "artifactContent": None,
+        "artifactContent": _extract_brief_artifact_if_present(stage, memory, None),
         "errorCode": error_code,
     }
 
@@ -117,7 +131,9 @@ def _response_dict(
             if isinstance(lbl, str) and lbl.strip() and lbl.strip() not in clean_suggs:
                 clean_suggs.append(lbl.strip())
 
-    stage_val = stage_decision.get("stage") if isinstance(stage_decision, dict) else None
+    stage_val = stage_decision.get("stage") if isinstance(stage_decision, dict) else stage
+    effective_artifact = _extract_brief_artifact_if_present(str(stage_val), memory, artifact_content)
+
     return {
         "requestId": str(request_id),
         "sessionId": str(session_id),
@@ -129,7 +145,7 @@ def _response_dict(
         "suggestions": clean_suggs,
         "selectedChips": build_selected_chips(memory, stage=stage_val),
         "plannerNotesView": build_planner_notes_view(memory),
-        "artifactContent": artifact_content,
+        "artifactContent": effective_artifact,
         "errorCode": error_code,
     }
 
@@ -821,15 +837,28 @@ async def process_conversation_turn(
 
     if meta_intent == "gibberish":
         ai_result["memoryPatch"] = {}
-        ai_result["stageDecision"] = {
-            "type": StageDecisionType.REQUEST_CLARIFICATION.value,
-            "stage": stage,
-        }
-        if not (ai_result.get("plannerReply") or "").strip():
-            ai_result["plannerReply"] = (
-                "I didn't quite catch that! As your wedding planner, I'm here to assist you with all your wedding arrangements. "
-                "Could you please share your preference for this stage?"
-            )
+        if stage == StageId.S5_BRIEF.value:
+            ai_result["stageDecision"] = {
+                "type": StageDecisionType.STAY.value,
+                "stage": stage,
+            }
+            if not (ai_result.get("plannerReply") or "").strip():
+                ai_result["plannerReply"] = (
+                    "Everything is saved in your wedding vision brief right below! Whenever you're ready, tap 'Show me directions' to explore design concepts."
+                )
+        else:
+            ai_result["stageDecision"] = {
+                "type": StageDecisionType.REQUEST_CLARIFICATION.value,
+                "stage": stage,
+            }
+            if not (ai_result.get("plannerReply") or "").strip():
+                import random
+                _fallbacks = [
+                    "I didn't quite catch that! Could you please clarify your preference?",
+                    "Hmm, I'm not sure I understood that correctly! Could you rephrase your thoughts?",
+                    "I want to make sure I capture your exact vision — could you tell me a bit more?",
+                ]
+                ai_result["plannerReply"] = random.choice(_fallbacks)
     elif meta_intent in ("help", "more_suggestions"):
         ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {

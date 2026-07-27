@@ -30,7 +30,62 @@ KNOWN_CITIES = (
     "chennai", "hyderabad", "kolkata", "agra", "jodhpur", "pune", "gurgaon",
     "gurugram", "noida", "chandigarh", "lucknow", "ahmedabad", "kochi",
     "trivandrum", "indore", "bhopal", "shimla", "manali", "rishikesh",
+    "london", "paris", "dubai", "lahore", "karachi", "islamabad",
 )
+
+CITY_TO_COUNTRY_MAP: dict[str, str] = {
+    "london": "United Kingdom",
+    "uk": "United Kingdom",
+    "england": "United Kingdom",
+    "paris": "France",
+    "france": "France",
+    "lahore": "Pakistan",
+    "lahore fort": "Pakistan",
+    "karachi": "Pakistan",
+    "islamabad": "Pakistan",
+    "delhi": "India",
+    "new delhi": "India",
+    "goa": "India",
+    "mumbai": "India",
+    "jaipur": "India",
+    "udaipur": "India",
+    "bangalore": "India",
+    "bengaluru": "India",
+    "chennai": "India",
+    "hyderabad": "India",
+    "kolkata": "India",
+    "agra": "India",
+    "jodhpur": "India",
+    "pune": "India",
+    "chandigarh": "India",
+    "lucknow": "India",
+    "ahmedabad": "India",
+    "kochi": "India",
+    "shimla": "India",
+    "rishikesh": "India",
+    "dubai": "UAE",
+    "uae": "UAE",
+    "abu dhabi": "UAE",
+    "istanbul": "Turkey",
+    "turkey": "Turkey",
+    "bali": "Indonesia",
+    "indonesia": "Indonesia",
+    "rome": "Italy",
+    "tuscany": "Italy",
+    "italy": "Italy",
+}
+
+
+def infer_country_from_place(place: str) -> str:
+    """Infer country name from location/city string."""
+    if not place or not isinstance(place, str):
+        return ""
+    p_lower = place.strip().lower()
+    for key, country in CITY_TO_COUNTRY_MAP.items():
+        if key in p_lower:
+            return country
+    return ""
+
 
 # Phrases that belong in vibe / occasion — never personality tags
 _OCCASION_OR_VIBE_WORDS = (

@@ -51,6 +51,20 @@ def deep_merge(base: dict, patch: dict, is_correction: bool = False) -> dict:
             result[key] = existing
         else:
             result[key] = copy.deepcopy(val)
+
+    # Safety check: If occasion.place exists in merged memory, ensure country is updated to match the place
+    if "occasion" in patch and isinstance(result.get("occasion"), dict):
+        occ = result["occasion"]
+        place = (occ.get("place") or "").strip()
+        if place:
+            from app.utils.validators import infer_country_from_place
+            inferred = infer_country_from_place(place)
+            patch_country = (patch.get("occasion", {}).get("country") or "").strip()
+            if patch_country:
+                occ["country"] = patch_country
+            elif inferred:
+                occ["country"] = inferred
+
     return result
 
 
