@@ -20,6 +20,13 @@ def _fallback_question(stage: str, memory: dict) -> str:
     if stage == StageId.S2_BASICS.value:
         from app.utils.validators import get_occasion_state
         state = get_occasion_state(memory)
+        spec_level = state.get("specificity_level")
+        if spec_level == "L0":
+            return "I couldn’t make out a location or timing from that. Tell me in a simple way — even a broad setting and season is enough."
+        if spec_level == "IL1":
+            place_str = state["place"] or "A broad setting"
+            when_str = state["when"] or "your timeline"
+            return f"{place_str} in {when_str} is a good starting direction. Do you have a region/month in mind, or should I keep this flexible for now?"
         if state["has_place"] and not state["has_time"]:
             return f"{state['place']} — roughly which month or season?"
         if state["has_time"] and not state["has_place"]:

@@ -20,7 +20,7 @@ DEFAULT_PLANNER_MEMORY: dict = {
         "datePreference": "",
         "seasonPreference": "",
         "destinationMode": "unknown",
-        "isConfirmed": False,
+        "specificityLevel": "",
     },
     "personality": {
         "tags": [],

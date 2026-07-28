@@ -53,24 +53,29 @@ from app.domain.enums import (
 STAGE_CONFIG: dict[str, dict] = {
 
     StageId.S2_BASICS.value: {
-        "goal": "Capture where and when the wedding will be. Advance when we have a real place + future date/season.",
+        "goal": "Capture where and when the wedding will be. Advance when location/timing is confirmed or kept flexible.",
         "extractionRules": """\
 IMPORTANT: Even if metaIntent is "correction" (e.g. correcting names), STILL extract ALL S2 fields below.
 
+SPECIFICITY LEVEL (output validationNotes.specificityLevel):
+- L0: Junk / unusable (e.g. "kgjhgjkh ghjghj", "123123") → set metaIntent = "gibberish"
+- IL1: Broad setting/timing (e.g. "beach destination in winter of 26", "royal palace wedding sometime next year")
+- IL1_FLEXIBLE: Flexible consent / non-committal (e.g. "nothing finalized", "not sure", "keep it flexible", "decide later")
+  → set validatedPatch.occasion.specificityLevel = "IL1_FLEXIBLE"
+- IL2: Refined region & month (e.g. "East Asia in Dec 26", "Thailand or Bali in December 2026", "Rajasthan palace in Feb 2026")
+- IL3: Exact city & dates (e.g. "Goa, Dec 18-20 2026", "Udaipur, Feb 12-14 2026", "Phuket first week of December 2026")
+
 Extract into validatedPatch.occasion (only fields that are mentioned):
-- place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "Lahore Fort", "Dubai")
+- place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "East Asia", "Thailand or Bali", "Udaipur")
   → In validationNotes.resolvedCountry: identify the country
     Examples: "Lahore Fort" → Pakistan, "Delhi" → India, "Dubai" → UAE, "Goa" → India
-  → In validationNotes.isValidLocation: false ONLY for clearly fictional/impossible places
 - datePreference: future date (day+month+year, month+year, or year) — MUST preserve exact day/month when provided
   → TODAY IS: July 2026
-  → "12 June 2028" → "12 June 2028"  (preserve exact day, month, and year)
-  → "June 12, 2028" → "12 June 2028"
-  → "next year June" → "June 2027"  (next year from July 2026 = 2027)
+  → "12 June 2028" → "12 June 2028"
+  → "next year June" → "June 2027"
   → "this December" → "December 2026"
   → If resolved date is before July 2026: set validationNotes.isPastDate=true, exclude from patch
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
-  → Do NOT put datePreference content here
 - settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
 - destinationMode: "destination" (away from home) | "local" (same city) | "unknown"
 
@@ -85,11 +90,10 @@ EARLY SIGNALS CONFIRMATION: If earlySignals already in memory AND user confirms 
 
 Reject (do not include in validatedPatch, add to validationNotes.rejectedReasons):
 - Past dates or years (before July 2026)
-- Vague timing: "nice weather", "someday", "sometime", "not sure"
-- Gibberish""",
+- Gibberish / random noise""",
         "requiredFields": ["occasion.place", "occasion.datePreference"],
         "missingFieldsHint": ["wedding destination (city or region)", "wedding date or season"],
-        "advanceCondition": "place + concrete future month/season in memory",
+        "advanceCondition": "Location & timing confirmed (IL2/IL3/IL1_FLEXIBLE) or broad location asked once (IL1 turn 2)",
         "stateless": True,
     },
 

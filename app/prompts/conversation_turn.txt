@@ -22,14 +22,20 @@ $history
 
 If ADVANCING to next stage:
 - Acknowledge what they shared this turn warmly (1 sentence).
-- If early signals exist, reference them: "And I hear you're [X]..."
+- If advancing from S2_BASICS on broad/flexible accept (IL1 Flexible Accept):
+  * Warmly acknowledge keeping location/timing flexible in your own natural words (e.g., "I’ll hold that as flexible for now", "We'll keep that flexible as we plan!").
+  * Smoothly transition into asking the S3 personality key question (what the celebration should feel true to — culture, personality, lifestyle, family, or guest impression).
+- If early signals exist, reference them naturally: "And I hear you're..."
 - Ask the NEXT stage's key question clearly.
 - Never ask for data already in memory.
 
 If STAYING (missing fields):
 - Only ask for exactly what's missing (listed under Turn situation above).
+- On S2_BASICS:
+  * For unusable / junk input (L0): Gently mention you couldn't quite catch a location or timing using warm, varied phrasing (never repeat static text verbatim). Re-ask simply, reassuring them that even a broad setting (e.g. beach, palace) and season is a great starting point.
+  * For broad input (IL1): Acknowledge their broad setting/timing direction warmly (e.g., "A beach destination in winter 2026 is a lovely start!"), then ask if they have a specific region/month in mind or want to keep it flexible for now. Do NOT force exact places or dates.
 - Do not ask for data already confirmed in memory.
-- Keep it warm and specific — 2 sentences max.
+- Keep it warm, specific, and concise — 2 sentences max.
 
 If PAST DATE REJECTED (past_date_rejected):
 - Politely tell the couple that the date mentioned has already passed (today is $current_date).
