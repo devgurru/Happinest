@@ -87,11 +87,11 @@ class ExtractionResult:
         if meta_intent in ("help", "more_suggestions", "gibberish"):
             validated_patch = {}
 
-        # Normalise early signals
+        # Normalise early signals (capped to max 3 relevant items for personality/vibe)
         raw_es = raw.get("earlySignals") or {}
         early_signals = {
-            "personality": _clean_string_list(raw_es.get("personality")),
-            "vibe": _clean_string_list(raw_es.get("vibe")),
+            "personality": _clean_string_list(raw_es.get("personality"))[:3],
+            "vibe": _clean_string_list(raw_es.get("vibe"))[:3],
             "events": _normalise_events(raw_es.get("events")),
             "budget": raw_es.get("budget") if isinstance(raw_es.get("budget"), dict) else {},
             "vendors": raw_es.get("vendors") if isinstance(raw_es.get("vendors"), dict) else {},
@@ -244,16 +244,16 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
         if occasion:
             patch["occasion"] = occasion
 
-    # S3: reject non-personality tags (cities, dates)
+    # S3: reject non-personality tags (cities, dates) & cap at max 3 tags
     if stage == StageId.S3_PERSONALITY.value:
         personality = patch.get("personality") or {}
         if isinstance(personality, dict):
             from app.utils.validators import filter_tags
             tags = personality.get("tags") or []
-            personality["tags"] = filter_tags(tags)
+            personality["tags"] = filter_tags(tags)[:3]
             patch["personality"] = personality
 
-    # S4: ensure primaryVibe is not a city or month
+    # S4: ensure primaryVibe is valid & cap secondaryVibes to max 3
     if stage == StageId.S4_VIBE.value:
         vibe = patch.get("vibe") or {}
         if isinstance(vibe, dict):
@@ -261,7 +261,10 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
             from app.utils.validators import is_valid_primary_vibe
             if primary and not is_valid_primary_vibe(primary):
                 vibe.pop("primaryVibe", None)
-                patch["vibe"] = vibe
+            secondary = vibe.get("secondaryVibes") or []
+            if isinstance(secondary, list):
+                vibe["secondaryVibes"] = secondary[:3]
+            patch["vibe"] = vibe
 
     # S8: sanitise guest counts against confirmed events
     if stage == StageId.S8_GUESTS.value:

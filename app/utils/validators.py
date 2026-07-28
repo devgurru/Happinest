@@ -509,7 +509,7 @@ def is_junk_tag(label: str) -> bool:
 
 
 def filter_tags(tags: list) -> list[str]:
-    """Dedupe and drop junk tags."""
+    """Dedupe, drop junk tags, and cap at max 3 tags."""
     out: list[str] = []
     seen: set[str] = set()
     for tag in tags or []:
@@ -523,7 +523,7 @@ def filter_tags(tags: list) -> list[str]:
             continue
         seen.add(key)
         out.append(clean)
-    return out
+    return out[:3]
 
 
 def extract_vibe_label(message: str) -> str | None:
