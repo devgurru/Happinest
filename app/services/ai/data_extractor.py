@@ -183,7 +183,7 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
 
     # S2_BASICS: process extracted specificityLevel
     if stage == StageId.S2_BASICS.value:
-        from app.utils.validators import classify_s2_info_level
+        from app.utils.validators import classify_s2_info_level, looks_like_gibberish
         validation_notes = raw.get("validationNotes") or {}
         extracted_level = str(
             validation_notes.get("specificityLevel")
@@ -192,23 +192,47 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
         ).strip().upper()
 
         occ_patch = dict(patch.get("occasion") or {})
-        merged_occ = {**(memory.get("occasion") or {}), **occ_patch}
-        backend_level = classify_s2_info_level(merged_occ, user_message=user_message)
-        spec_level = extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level
+        memory_occ = memory.get("occasion") or {}
+        merged_occ = {**memory_occ, **occ_patch}
 
-        prior_spec_level = (memory.get("occasion") or {}).get("specificityLevel") or ""
+        raw_meta = str(raw.get("metaIntent") or "").lower().strip()
+        msg_text = (user_message or "").strip()
 
-        if spec_level == "L0":
-            if not prior_spec_level:
-                raw["metaIntent"] = "gibberish"
-                if not patch.get("identity"):
-                    patch = {}
+        is_gibberish_turn = (
+            raw_meta == "gibberish"
+            or extracted_level == "L0"
+            or (bool(msg_text) and looks_like_gibberish(msg_text))
+        )
 
-        # Turn 2 rule: If we were already on IL1 on turn 1, any response on turn 2 advances to S3
-        if prior_spec_level == "IL1":
-            spec_level = "IL1_FLEXIBLE"
-            if raw.get("metaIntent") in ("clarification", "gibberish"):
-                raw["metaIntent"] = "normal"
+        prior_spec_level = memory_occ.get("specificityLevel") or ""
+
+        if is_gibberish_turn:
+            spec_level = "L0"
+            raw["metaIntent"] = "gibberish"
+            if not patch.get("identity"):
+                patch = {}
+            occ_patch = {**memory_occ, "specificityLevel": "L0"}
+        else:
+            backend_level = classify_s2_info_level(merged_occ, user_message=user_message)
+            spec_level = extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level
+
+            # If prior turn was IL1 (broad setting prompt was asked on turn 1)
+            if prior_spec_level in ("IL1", "L0"):
+                new_setting = (occ_patch.get("settingPreference") or occ_patch.get("place") or "").strip().lower()
+                old_setting = (memory_occ.get("settingPreference") or memory_occ.get("place") or "").strip().lower()
+                is_new_broad_setting = bool(new_setting) and (new_setting != old_setting) and spec_level == "IL1"
+
+                if is_new_broad_setting:
+                    # User changed to a new broad setting on turn 2 -> Treat as IL1 for new setting (STAY ON S2 ONCE)
+                    spec_level = "IL1"
+                elif spec_level in ("IL2", "IL3"):
+                    # User provided refined/exact location -> Keep IL2/IL3 (ADVANCE)
+                    pass
+                else:
+                    # User confirmed/passed/responded to prompt -> Transition to IL1_FLEXIBLE (ADVANCE)
+                    spec_level = "IL1_FLEXIBLE"
+                    if raw_meta in ("clarification",):
+                        raw["metaIntent"] = "normal"
 
         occ_patch["specificityLevel"] = spec_level
         patch["occasion"] = occ_patch
