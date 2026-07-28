@@ -1273,7 +1273,7 @@ async def process_conversation_turn(
         StageId.S10_VENDORS.value,
     })
     effective_stage = final_stage if final_stage != stage else stage
-    if effective_stage not in _CHIP_STAGES:
+    if effective_stage not in _CHIP_STAGES or meta_intent == "gibberish":
         suggestions = []
     else:
         suggestion_stage = effective_stage

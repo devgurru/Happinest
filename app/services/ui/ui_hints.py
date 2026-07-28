@@ -186,12 +186,20 @@ def build_s2_location_suggestions(memory: dict) -> list[str]:
     Generate context-aware city/region chip suggestions for S2 when location/timing is broad (IL1).
     Matches user's country, setting (beach, palace, mountains, nature, urban, etc.) and destination mode.
     Returns ONLY destination / city / place suggestions matching input values.
+    Returns empty list on gibberish / L0 turns.
     """
     occ = memory.get("occasion") or {}
+    spec_level = (occ.get("specificityLevel") or "").strip().upper()
+    if spec_level == "L0":
+        return []
+
     country = (occ.get("country") or "").strip().lower()
     place_text = (
         f"{occ.get('place') or ''} {occ.get('locationPreference') or ''} {occ.get('settingPreference') or ''} {occ.get('destinationMode') or ''} {country}"
     ).lower().strip()
+
+    if not place_text:
+        return []
 
     # 1. Country-based destination suggestions
     for c_key, c_destinations in COUNTRY_DESTINATIONS.items():

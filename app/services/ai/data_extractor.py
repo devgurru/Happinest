@@ -248,6 +248,8 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
                 occ_patch["place"] = f"{prior_place}, {new_place}"
 
             spec_level = backend_level if backend_level in ("IL2", "IL3") else (extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level)
+            if is_country_query and spec_level == "L0":
+                spec_level = "IL1"
 
             # If prior turn was IL1 (broad setting prompt was asked on turn 1)
             if prior_spec_level == "IL1":
