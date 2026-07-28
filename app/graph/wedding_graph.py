@@ -1266,6 +1266,7 @@ async def process_conversation_turn(
     # Chips are ONLY meaningful on stages that have selectable options.
     # S1, S2, S5, S6, S8, S9, S11 → empty list (agent asks directly, no chips)
     _CHIP_STAGES = frozenset({
+        StageId.S2_BASICS.value,
         StageId.S3_PERSONALITY.value,
         StageId.S4_VIBE.value,
         StageId.S7_EVENTS.value,

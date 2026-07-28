@@ -198,13 +198,22 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
         raw_meta = str(raw.get("metaIntent") or "").lower().strip()
         msg_text = (user_message or "").strip()
 
-        is_gibberish_turn = (
+        from app.utils.validators import infer_country_from_place
+        inferred_country = infer_country_from_place(msg_text) or infer_country_from_place(occ_patch.get("place") or "")
+
+        if inferred_country:
+            occ_patch["country"] = inferred_country
+            if not occ_patch.get("locationPreference") and not occ_patch.get("place"):
+                occ_patch["locationPreference"] = inferred_country
+
+        is_country_query = bool(inferred_country)
+        is_gibberish_turn = not is_country_query and (
             raw_meta == "gibberish"
             or extracted_level == "L0"
             or (bool(msg_text) and looks_like_gibberish(msg_text))
         )
 
-        prior_spec_level = memory_occ.get("specificityLevel") or ""
+        prior_spec_level = memory_occ.get("specificityLevel") or classify_s2_info_level(memory_occ)
 
         if is_gibberish_turn:
             spec_level = "L0"
@@ -213,11 +222,35 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
                 patch = {}
             occ_patch = {**memory_occ, "specificityLevel": "L0"}
         else:
+            if is_country_query and raw_meta in ("gibberish", "clarification"):
+                raw["metaIntent"] = "normal"
+            from app.utils.validators import KNOWN_CITIES
             backend_level = classify_s2_info_level(merged_occ, user_message=user_message)
-            spec_level = extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level
+            if is_country_query and backend_level == "L0":
+                backend_level = "IL1"
+            
+            # Format place string: e.g. "beach destination, Goa"
+            prior_place = (memory_occ.get("place") or memory_occ.get("settingPreference") or "").strip()
+            new_place = (occ_patch.get("place") or "").strip()
+
+            is_new_city = any(city in new_place.lower() for city in KNOWN_CITIES) if new_place else False
+            if is_new_city:
+                backend_level = "IL3"
+                broad_prefix = (memory_occ.get("settingPreference") or memory_occ.get("locationPreference") or "").strip()
+                if not broad_prefix and "," in prior_place:
+                    broad_prefix = prior_place.split(",")[0].strip()
+                
+                if broad_prefix and broad_prefix.lower() != new_place.lower():
+                    occ_patch["place"] = f"{broad_prefix}, {new_place}"
+                else:
+                    occ_patch["place"] = new_place
+            elif prior_place and new_place and new_place.lower() not in prior_place.lower():
+                occ_patch["place"] = f"{prior_place}, {new_place}"
+
+            spec_level = backend_level if backend_level in ("IL2", "IL3") else (extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level)
 
             # If prior turn was IL1 (broad setting prompt was asked on turn 1)
-            if prior_spec_level in ("IL1", "L0"):
+            if prior_spec_level == "IL1":
                 new_setting = (occ_patch.get("settingPreference") or occ_patch.get("place") or "").strip().lower()
                 old_setting = (memory_occ.get("settingPreference") or memory_occ.get("place") or "").strip().lower()
                 is_new_broad_setting = bool(new_setting) and (new_setting != old_setting) and spec_level == "IL1"

@@ -13,6 +13,7 @@ from app.domain.chip_pools import CHIP_POOLS, get_chip_pool
 from app.domain.enums import StageId
 
 CHIP_STAGES = {
+    StageId.S2_BASICS.value,
     StageId.S3_PERSONALITY.value,
     StageId.S4_VIBE.value,
     StageId.S7_EVENTS.value,
@@ -162,6 +163,56 @@ def build_guest_count_suggestions(memory: dict) -> list[str]:
     return suggestions[:6]
 
 
+COUNTRY_DESTINATIONS: dict[str, list[str]] = {
+    "pakistan": ["Lahore", "Karachi", "Islamabad", "Bhurban", "Hunza", "Naran"],
+    "india": ["Udaipur", "Goa", "Jaipur", "Jodhpur", "Kerala", "Mussoorie"],
+    "thailand": ["Phuket", "Bangkok", "Koh Samui", "Chiang Mai", "Krabi", "Pattaya"],
+    "uae": ["Dubai", "Abu Dhabi", "Ras Al Khaimah"],
+    "dubai": ["Dubai", "Abu Dhabi", "Ras Al Khaimah"],
+    "italy": ["Florence", "Lake Como", "Amalfi Coast", "Venice", "Tuscany", "Rome"],
+    "france": ["Paris", "French Riviera", "Nice", "Provence"],
+    "uk": ["London", "Cotswolds", "Edinburgh"],
+    "united kingdom": ["London", "Cotswolds", "Edinburgh"],
+    "usa": ["Hawaii", "Aspen", "Napa Valley", "Miami", "New York"],
+    "indonesia": ["Bali", "Ubud", "Seminyak"],
+    "maldives": ["Male", "Maafushi", "Baa Atoll"],
+    "spain": ["Barcelona", "Ibiza", "Mallorca", "Seville"],
+    "turkey": ["Istanbul", "Cappadocia", "Antalya", "Bodrum"],
+}
+
+
+def build_s2_location_suggestions(memory: dict) -> list[str]:
+    """
+    Generate context-aware city/region chip suggestions for S2 when location/timing is broad (IL1).
+    Matches user's country, setting (beach, palace, mountains, nature, urban, etc.) and destination mode.
+    Returns ONLY destination / city / place suggestions matching input values.
+    """
+    occ = memory.get("occasion") or {}
+    country = (occ.get("country") or "").strip().lower()
+    place_text = (
+        f"{occ.get('place') or ''} {occ.get('locationPreference') or ''} {occ.get('settingPreference') or ''} {occ.get('destinationMode') or ''} {country}"
+    ).lower().strip()
+
+    # 1. Country-based destination suggestions
+    for c_key, c_destinations in COUNTRY_DESTINATIONS.items():
+        if c_key in place_text:
+            return c_destinations[:6]
+
+    # 2. Setting/Location-based destination suggestions
+    if any(k in place_text for k in ("beach", "coastal", "ocean", "sea", "island", "tropical")):
+        return ["Goa", "Phuket", "Bali", "Maldives", "Koh Samui", "Boracay"]
+    elif any(k in place_text for k in ("palace", "royal", "fort", "heritage", "castle")):
+        return ["Udaipur", "Jaipur", "Jodhpur", "Florence", "Agra", "Muscat"]
+    elif any(k in place_text for k in ("mountain", "hill", "nature", "outdoor", "valley", "alpine")):
+        return ["Shimla", "Manali", "Lake Como", "Swiss Alps", "Mussoorie", "Aspen"]
+    elif any(k in place_text for k in ("urban", "modern", "city", "skyline")):
+        return ["Dubai", "Singapore", "Delhi", "Mumbai", "London", "New York"]
+    elif any(k in place_text for k in ("destination", "resort")):
+        return ["Goa", "Udaipur", "Phuket", "Bali", "Jaipur", "Maldives"]
+
+    return ["Goa", "Udaipur", "Jaipur", "Phuket", "Bali", "Thailand"]
+
+
 def build_ui_suggestions(
     stage: str,
     memory: dict,
@@ -176,6 +227,9 @@ def build_ui_suggestions(
     Excludes any chip labels already selected in memory.
     """
     display_stage = for_stage or stage
+
+    if display_stage == StageId.S2_BASICS.value:
+        return build_s2_location_suggestions(memory)
 
     if display_stage == StageId.S8_GUESTS.value:
         guest_hints = build_guest_count_suggestions(memory)

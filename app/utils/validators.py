@@ -31,6 +31,9 @@ KNOWN_CITIES = (
     "gurugram", "noida", "chandigarh", "lucknow", "ahmedabad", "kochi",
     "trivandrum", "indore", "bhopal", "shimla", "manali", "rishikesh",
     "london", "paris", "dubai", "lahore", "karachi", "islamabad",
+    "phuket", "bali", "maldives", "koh samui", "boracay", "florence",
+    "lake como", "swiss alps", "singapore", "muscat", "mussoorie", "aspen",
+    "thailand", "hawaii", "santorini", "cancun",
 )
 
 CITY_TO_COUNTRY_MAP: dict[str, str] = {
@@ -43,6 +46,7 @@ CITY_TO_COUNTRY_MAP: dict[str, str] = {
     "lahore fort": "Pakistan",
     "karachi": "Pakistan",
     "islamabad": "Pakistan",
+    "pakistan": "Pakistan",
     "delhi": "India",
     "new delhi": "India",
     "goa": "India",
@@ -365,7 +369,7 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
             return "L0"
         return "L0"
 
-    p_lower = (place or location_pref or setting).lower()
+    p_lower = (place or location_pref or setting or msg_l).lower()
     has_exact_city = any(city in p_lower for city in KNOWN_CITIES)
     has_exact_date = bool(re.search(r"\b\d{1,2}(st|nd|rd|th)?\b|\b\d{1,2}\s*[-–—]\s*\d{1,2}\b", combined_text))
     has_month = any(m in combined_text for m in MONTHS)
