@@ -72,6 +72,7 @@ $stage_extraction_rules
     "isPastDate": false,
     "resolvedCountry": "",
     "isValidLocation": true,
+    "specificityLevel": "L0 | IL1 | IL1_FLEXIBLE | IL2 | IL3",
     "rejectedReasons": []
   },
   "extractionSummary": "one concise line describing exactly what was extracted or why nothing was extracted"

@@ -315,10 +315,79 @@ def sanitize_timing_fields(occasion: dict) -> dict:
     return occ
 
 
-def get_occasion_state(memory: dict) -> dict:
+S2_FLEXIBLE_PHRASES = (
+    "nothing finalized", "not sure", "keep it flexible", "keep it broad",
+    "decide later", "help me finalize later", "flexible", "no idea",
+    "you tell me", "let's keep it flexible", "skip", "no preference",
+    "not decided", "to be decided", "undecided", "later", "anywhere",
+)
+
+S2_REFINED_REGIONS = (
+    "east asia", "south asia", "southeast asia", "middle east", "europe", "caribbean",
+    "rajasthan", "south india", "north india", "goa or bali", "thailand or bali",
+    "italy or greece", "bali or phuket", "kerala", "himachal", "uttarakhand",
+)
+
+
+def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str:
+    """
+    Classify S2 input into one of 5 specificity levels:
+    - "L0": Junk / unusable
+    - "IL1_FLEXIBLE": Flexible accept phrases (e.g. "not sure", "keep it flexible")
+    - "IL1": Broad setting or season/year without specific region/month
+    - "IL2": Refined region/country + month/year
+    - "IL3": Exact city/venue + month/dates/year
+    """
+    msg_l = (user_message or "").strip().lower()
+    if msg_l and any(phrase in msg_l for phrase in S2_FLEXIBLE_PHRASES):
+        return "IL1_FLEXIBLE"
+
+    occ = memory_or_patch.get("occasion") if isinstance(memory_or_patch.get("occasion"), dict) else memory_or_patch
+    if not isinstance(occ, dict):
+        occ = {}
+
+    place = (occ.get("place") or "").strip()
+    setting = (occ.get("settingPreference") or "").strip()
+    location_pref = (occ.get("locationPreference") or "").strip()
+    date_pref = (occ.get("datePreference") or "").strip()
+    season_pref = (occ.get("seasonPreference") or "").strip()
+    spec_level = (occ.get("specificityLevel") or "").strip().upper()
+
+    if spec_level == "IL1_FLEXIBLE":
+        return "IL1_FLEXIBLE"
+
+    combined_text = f"{place} {setting} {location_pref} {date_pref} {season_pref} {msg_l}".lower()
+    if any(phrase in combined_text for phrase in S2_FLEXIBLE_PHRASES):
+        return "IL1_FLEXIBLE"
+
+    if not place and not setting and not location_pref and not date_pref and not season_pref:
+        if msg_l and looks_like_gibberish(msg_l):
+            return "L0"
+        return "L0"
+
+    p_lower = (place or location_pref or setting).lower()
+    has_exact_city = any(city in p_lower for city in KNOWN_CITIES)
+    has_exact_date = bool(re.search(r"\b\d{1,2}(st|nd|rd|th)?\b|\b\d{1,2}\s*[-–—]\s*\d{1,2}\b", combined_text))
+    has_month = any(m in combined_text for m in MONTHS)
+
+    if has_exact_city and (has_exact_date or has_month):
+        return "IL3"
+    if has_exact_city:
+        return "IL3"
+
+    has_refined_region = any(reg in p_lower for reg in S2_REFINED_REGIONS) or bool(occ.get("country"))
+    if has_refined_region and (has_month or has_exact_date):
+        return "IL2"
+    if has_refined_region:
+        return "IL2"
+
+    return "IL1"
+
+
+def get_occasion_state(memory: dict, user_message: str = "") -> dict:
     """
     Resolved occasion place/timing from canonical occasion + legacy top-level fields.
-    AI sometimes writes place at the wrong level — this keeps S2 gates and replies accurate.
+    Evaluates specificityLevel for S2 stay/advance gate.
     """
     occ = sanitize_timing_fields(dict(memory.get("occasion") or {}))
 
@@ -342,13 +411,25 @@ def get_occasion_state(memory: dict) -> dict:
     ).strip()
     has_place = bool(place)
     has_time = is_concrete_timing(occ)
+
+    spec_level = occ.get("specificityLevel") or classify_s2_info_level(occ, user_message=user_message)
+
+    if spec_level == "L0":
+        is_complete = False
+    elif spec_level == "IL1":
+        is_complete = False  # Stay on S2 once for IL1 turn 1
+    else:
+        # IL1_FLEXIBLE, IL2, IL3 advance to S3!
+        is_complete = True
+
     return {
         "occasion": occ,
         "place": place,
         "when": (occ.get("datePreference") or occ.get("seasonPreference") or "").strip(),
         "has_place": has_place,
         "has_time": has_time,
-        "is_complete": has_place and has_time,
+        "specificity_level": spec_level,
+        "is_complete": is_complete,
     }
 
 
@@ -428,7 +509,7 @@ def is_junk_tag(label: str) -> bool:
 
 
 def filter_tags(tags: list) -> list[str]:
-    """Dedupe and drop junk tags."""
+    """Dedupe, drop junk tags, and cap at max 3 tags."""
     out: list[str] = []
     seen: set[str] = set()
     for tag in tags or []:
@@ -442,7 +523,7 @@ def filter_tags(tags: list) -> list[str]:
             continue
         seen.add(key)
         out.append(clean)
-    return out
+    return out[:3]
 
 
 def extract_vibe_label(message: str) -> str | None:

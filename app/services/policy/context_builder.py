@@ -350,10 +350,17 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
         if stage == StageId.S2_BASICS.value:
             from app.utils.validators import get_occasion_state
             state = get_occasion_state(memory)
-            if not state["has_place"]:
-                missing.append("wedding destination (city or region)")
-            if not state["has_time"]:
-                missing.append("wedding date or season")
+            spec_level = state.get("specificity_level")
+
+            if spec_level == "L0":
+                missing.append("location or timing in a simple way (even broad setting and season is enough)")
+            elif spec_level == "IL1":
+                missing.append("whether you have a specific region/month in mind or want to keep it flexible for now")
+            else:
+                if not state["has_place"]:
+                    missing.append("wedding destination (city or region)")
+                if not state["has_time"]:
+                    missing.append("wedding date or season")
             return missing
         if stage == StageId.S3_PERSONALITY.value:
             from app.utils.validators import filter_tags

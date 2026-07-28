@@ -69,7 +69,7 @@ class ExtractionResult:
     # ── factory ───────────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, raw: dict, *, stage: str = "", memory: dict | None = None) -> "ExtractionResult":
+    def from_dict(cls, raw: dict, *, stage: str = "", memory: dict | None = None, user_message: str = "") -> "ExtractionResult":
         """
         Parse and validate the raw dict from LLM.
         All missing / bad fields fall back to safe defaults.
@@ -87,11 +87,11 @@ class ExtractionResult:
         if meta_intent in ("help", "more_suggestions", "gibberish"):
             validated_patch = {}
 
-        # Normalise early signals
+        # Normalise early signals (capped to max 3 relevant items for personality/vibe)
         raw_es = raw.get("earlySignals") or {}
         early_signals = {
-            "personality": _clean_string_list(raw_es.get("personality")),
-            "vibe": _clean_string_list(raw_es.get("vibe")),
+            "personality": _clean_string_list(raw_es.get("personality"))[:3],
+            "vibe": _clean_string_list(raw_es.get("vibe"))[:3],
             "events": _normalise_events(raw_es.get("events")),
             "budget": raw_es.get("budget") if isinstance(raw_es.get("budget"), dict) else {},
             "vendors": raw_es.get("vendors") if isinstance(raw_es.get("vendors"), dict) else {},
@@ -110,9 +110,16 @@ class ExtractionResult:
         if meta_intent in ("help", "more_suggestions", "gibberish"):
             early_signals = {"personality": [], "vibe": [], "events": [], "budget": {}, "vendors": {}}
 
-
         # Stage-specific sanitisation
-        validated_patch = _sanitise_patch_for_stage(validated_patch, stage, raw, memory)
+        validated_patch = _sanitise_patch_for_stage(validated_patch, stage, raw, memory, user_message=user_message)
+
+        # Re-evaluate meta_intent after stage sanitisation
+        meta_intent = str(raw.get("metaIntent") or "normal").lower().strip()
+        if meta_intent not in _VALID_META_INTENTS:
+            meta_intent = "normal"
+        if meta_intent in ("help", "more_suggestions", "gibberish"):
+            validated_patch = {}
+            early_signals = {"personality": [], "vibe": [], "events": [], "budget": {}, "vendors": {}}
 
         corrected_section = raw.get("correctedSection")
         if corrected_section and not isinstance(corrected_section, str):
@@ -166,13 +173,45 @@ def _normalise_events(raw: Any) -> list[str]:
     return list(dict.fromkeys(normalised))  # deduplicate, preserve order
 
 
-def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) -> dict:
+def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, user_message: str = "") -> dict:
     """Apply hard backend rules to the extracted patch."""
     from datetime import date
     today = date.today()
 
-    if not patch or not isinstance(patch, dict):
-        return {}
+    if not isinstance(patch, dict):
+        patch = {}
+
+    # S2_BASICS: process extracted specificityLevel
+    if stage == StageId.S2_BASICS.value:
+        from app.utils.validators import classify_s2_info_level
+        validation_notes = raw.get("validationNotes") or {}
+        extracted_level = str(
+            validation_notes.get("specificityLevel")
+            or validation_notes.get("informationLevel")
+            or ""
+        ).strip().upper()
+
+        occ_patch = dict(patch.get("occasion") or {})
+        merged_occ = {**(memory.get("occasion") or {}), **occ_patch}
+        backend_level = classify_s2_info_level(merged_occ, user_message=user_message)
+        spec_level = extracted_level if extracted_level in ("L0", "IL1", "IL1_FLEXIBLE", "IL2", "IL3") else backend_level
+
+        prior_spec_level = (memory.get("occasion") or {}).get("specificityLevel") or ""
+
+        if spec_level == "L0":
+            if not prior_spec_level:
+                raw["metaIntent"] = "gibberish"
+                if not patch.get("identity"):
+                    patch = {}
+
+        # Turn 2 rule: If we were already on IL1 on turn 1, any response on turn 2 advances to S3
+        if prior_spec_level == "IL1":
+            spec_level = "IL1_FLEXIBLE"
+            if raw.get("metaIntent") in ("clarification", "gibberish"):
+                raw["metaIntent"] = "normal"
+
+        occ_patch["specificityLevel"] = spec_level
+        patch["occasion"] = occ_patch
 
     # Validate occasion dates and resolve country across ALL stages
     occasion = dict(patch.get("occasion") or {})
@@ -205,16 +244,16 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) 
         if occasion:
             patch["occasion"] = occasion
 
-    # S3: reject non-personality tags (cities, dates)
+    # S3: reject non-personality tags (cities, dates) & cap at max 3 tags
     if stage == StageId.S3_PERSONALITY.value:
         personality = patch.get("personality") or {}
         if isinstance(personality, dict):
             from app.utils.validators import filter_tags
             tags = personality.get("tags") or []
-            personality["tags"] = filter_tags(tags)
+            personality["tags"] = filter_tags(tags)[:3]
             patch["personality"] = personality
 
-    # S4: ensure primaryVibe is not a city or month
+    # S4: ensure primaryVibe is valid & cap secondaryVibes to max 3
     if stage == StageId.S4_VIBE.value:
         vibe = patch.get("vibe") or {}
         if isinstance(vibe, dict):
@@ -222,7 +261,10 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict) 
             from app.utils.validators import is_valid_primary_vibe
             if primary and not is_valid_primary_vibe(primary):
                 vibe.pop("primaryVibe", None)
-                patch["vibe"] = vibe
+            secondary = vibe.get("secondaryVibes") or []
+            if isinstance(secondary, list):
+                vibe["secondaryVibes"] = secondary[:3]
+            patch["vibe"] = vibe
 
     # S8: sanitise guest counts against confirmed events
     if stage == StageId.S8_GUESTS.value:
