@@ -383,7 +383,7 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
         if stage == StageId.S9_BUDGET.value:
             budget = (memory.get("logistics") or {}).get("budget") or {}
             if not budget.get("range"):
-                missing.append("budget range in lakhs")
+                missing.append("budget range")
             return missing
         if stage == StageId.S10_VENDORS.value:
             prefs = (memory.get("logistics") or {}).get("vendorPreferences") or {}

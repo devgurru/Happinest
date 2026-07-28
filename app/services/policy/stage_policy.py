@@ -236,19 +236,25 @@ Also extract into earlySignals:
     },
 
     StageId.S9_BUDGET.value: {
-        "goal": "Get a comfortable total budget range in INR lakhs.",
+        "goal": "Get a comfortable total budget range in local country currency or requested currency.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - budget: {
-    "range": "40-60 lakhs",
-    "currency": "INR"
+    "range": "27 Million" or "$2.5 Million" or "5 Lakhs" or "AED 500,000",
+    "currency": "PKR" / "INR" / "USD" / "AED" / "EUR" / "GBP" etc.
   }
-  Normalize amounts to lakhs:
-  - "1 crore" or "1 CR" → "100 lakhs"
-  - "50 lakhs" → "50 lakhs"
-  - "40-60" → "40-60 lakhs"
-  - "around 50" → "~50 lakhs"
-  - "$100k" → try to estimate INR equivalent or ask
+  Currency & Unit Normalization Rules:
+  - Default currency is inferred from the wedding country (Pakistan -> PKR, India -> INR, UAE -> AED, USA -> USD, UK -> GBP, Italy/Europe -> EUR, etc.).
+  - User EXPLICIT requested currency (e.g. "USD", "$", "AED", "EUR") ALWAYS overrides the country default.
+  - Unit Rules for ALL Currencies:
+    - Amounts >= 10 Lakhs (or >= 1 Million): ALWAYS format in MILLIONS (M) or BILLIONS (B)! Do NOT leave as Crores or 100+ Lakhs!
+      - 2.7 Crores (270 Lakhs) -> "27 Million"
+      - 1 Crore (100 Lakhs) -> "10 Million"
+      - 50 Lakhs -> "5 Million"
+      - 25 Lakhs -> "2.5 Million"
+      - 100 Crores -> "1 Billion"
+      - $1.5M / €2.5M -> "$1.5 Million" / "€2.5 Million"
+    - Amounts < 10 Lakhs (or < 1 Million): Format as Lakhs (for South Asian currencies e.g. "5 Lakhs") or Thousands/K (for global currencies e.g. "$500K" or "AED 500,000").
   - "not sure" or vague → do not extract, stay and clarify
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.budget has value in memory AND user confirms →
@@ -257,7 +263,7 @@ extract earlySignals.budget into validatedPatch.logistics.budget.
 Also extract into earlySignals:
 - vendors: { "photography": "candid" } — if mentioned""",
         "requiredFields": ["logistics.budget.range"],
-        "missingFieldsHint": ["budget range in lakhs (e.g. 40-60 lakhs)"],
+        "missingFieldsHint": ["budget range"],
         "advanceCondition": "budget.range filled",
         "stateless": False,
     },
