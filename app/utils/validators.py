@@ -527,7 +527,7 @@ def filter_tags(tags: list) -> list[str]:
             continue
         seen.add(key)
         out.append(clean)
-    return out[:3]
+    return out[:5]
 
 
 def extract_vibe_label(message: str) -> str | None:

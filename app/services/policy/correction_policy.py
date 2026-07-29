@@ -112,17 +112,17 @@ def detect_upstream_correction(
     if not mapped:
         return None
 
-    # Normal first fill / entry of current stage section
+    # Normal fill / entry of current stage section → not a correction
     if (
         stage_section
         and changed_sections == [stage_section]
         and not upstream
     ):
-        # On S8_GUESTS, filling guest counts is normal stage progression (not a correction)
-        if current_stage == StageId.S8_GUESTS.value and not events_changed:
-            return None
-        # On S9_BUDGET, filling budget is normal stage progression (not a correction)
-        if current_stage == StageId.S9_BUDGET.value and not events_changed and not guests_changed:
+        if current_stage in (StageId.S8_GUESTS.value, StageId.S9_BUDGET.value) and events_changed:
+            pass
+        elif current_stage == StageId.S9_BUDGET.value and guests_changed:
+            pass
+        else:
             return None
 
     if current_stage in (StageId.S8_GUESTS.value, StageId.S9_BUDGET.value) and events_changed:

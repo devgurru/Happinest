@@ -17,22 +17,45 @@ CHIP_STAGES = {
     StageId.S3_PERSONALITY.value,
     StageId.S4_VIBE.value,
     StageId.S7_EVENTS.value,
-    StageId.S8_GUESTS.value,
-    StageId.S10_VENDORS.value,
 }
 
 # Vendor category chips grouped by event (aligned with product screens)
 EVENT_VENDOR_CHIPS: dict[str, list[str]] = {
-    "mehndi": ["Mehendi artist", "Catering", "Décor"],
-    "haldi": ["Haldi setup", "Catering", "Décor"],
-    "sangeet": ["Stage and sound", "Sangeet performers", "Catering", "DJ"],
+    "mehndi": ["Mehendi artist", "Catering", "Décor", "Photography"],
+    "mehendi": ["Mehendi artist", "Catering", "Décor", "Photography"],
+    "haldi": ["Haldi setup", "Catering", "Décor", "Florals"],
+    "ubtan": ["Haldi setup", "Catering", "Décor", "Florals"],
+    "sangeet": ["Stage and sound", "Sangeet performers", "Catering", "DJ and entertainment"],
+    "nikkah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
+    "nikah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
+    "baraat": ["Baraat coordinator", "Band & Dhol", "Photography", "Catering"],
+    "walima": ["Venue & Décor", "Catering", "Photography", "Stage Setup"],
     "wedding ceremony": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
-    "reception": ["Photography", "Catering", "DJ and entertainment"],
-    "engagement": ["Photography", "Décor", "Catering"],
-    "cocktail night": ["Bar and beverages", "DJ", "Décor", "Catering"],
+    "wedding": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
+    "reception": ["Photography", "Catering", "DJ and entertainment", "Décor"],
+    "engagement": ["Photography", "Décor", "Catering", "Ring Stage Setup"],
     "ring ceremony": ["Décor", "Photography", "Catering"],
+    "cocktail night": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
+    "cocktail": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
     "after party": ["DJ and entertainment", "Bar and beverages", "Lighting"],
 }
+
+
+def get_vendors_for_event(event_name: str) -> list[str]:
+    """Return 3 to 5 curated vendor suggestions for a specific event."""
+    key = event_name.strip().lower()
+    for pattern, vendors in EVENT_VENDOR_CHIPS.items():
+        if pattern in key:
+            return vendors[:5]
+    return ["Photography", "Catering", "Décor", "Florals"]
+
+
+def build_vendor_suggestions_by_event(events: list[str]) -> dict[str, list[str]]:
+    """Build a mapping of event name -> 3 to 5 curated vendor suggestions."""
+    res = {}
+    for event in events:
+        res[event] = get_vendors_for_event(event)
+    return res
 
 
 def _normalize_label(label: str) -> str:
@@ -56,8 +79,7 @@ def build_vendor_chip_pool(events: list[str]) -> list[str]:
     pool: list[str] = []
     seen: set[str] = set()
     for event in events:
-        key = event.strip().lower()
-        for chip in EVENT_VENDOR_CHIPS.get(key, []):
+        for chip in get_vendors_for_event(event):
             if chip not in seen:
                 seen.add(chip)
                 pool.append(chip)
@@ -238,11 +260,6 @@ def build_ui_suggestions(
 
     if display_stage == StageId.S2_BASICS.value:
         return build_s2_location_suggestions(memory)
-
-    if display_stage == StageId.S8_GUESTS.value:
-        guest_hints = build_guest_count_suggestions(memory)
-        if guest_hints:
-            return guest_hints
 
     already_selected = _already_selected_chips_for_stage(display_stage, memory)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -303,13 +304,35 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
         if occasion:
             patch["occasion"] = occasion
 
-    # S3: reject non-personality tags (cities, dates) & cap at max 3 tags
+    # S3: reject non-personality tags & preserve all user-selected/submitted chips
     if stage == StageId.S3_PERSONALITY.value:
         personality = patch.get("personality") or {}
-        if isinstance(personality, dict):
-            from app.utils.validators import filter_tags
-            tags = personality.get("tags") or []
-            personality["tags"] = filter_tags(tags)[:3]
+        if not isinstance(personality, dict):
+            personality = {}
+
+        tags = list(personality.get("tags") or [])
+
+        # Recover any personality or vibe earlySignals extracted on S3 turn
+        early = raw.get("earlySignals") or {}
+        if isinstance(early, dict):
+            early_p = early.get("personality") or []
+            if isinstance(early_p, list):
+                tags.extend(early_p)
+            early_v = early.get("vibe") or []
+            if isinstance(early_v, list):
+                tags.extend(early_v)
+
+        # Parse user message for comma-separated chip inputs (e.g. "Foodies, Vibrant Cultural Celebration")
+        if user_message:
+            raw_parts = [p.strip() for p in user_message.split(",") if p.strip()]
+            from app.utils.validators import is_junk_tag
+            for part in raw_parts:
+                if not is_junk_tag(part) and part not in tags:
+                    tags.append(part)
+
+        from app.utils.validators import filter_tags
+        personality["tags"] = filter_tags(tags)[:5]
+        if personality["tags"]:
             patch["personality"] = personality
 
     # S4: ensure primaryVibe is valid & cap secondaryVibes to max 3
@@ -346,9 +369,70 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
                     logistics["guestCounts"] = cleaned_counts
                     patch["logistics"] = logistics
 
+    # S10: sanitise vendor preferences to be EventName -> list of vendor strings
+    if stage == StageId.S10_VENDORS.value or "vendorPreferences" in (patch.get("logistics") or {}):
+        logistics = patch.get("logistics") or {}
+        if isinstance(logistics, dict):
+            events_in_mem = (memory.get("logistics") or {}).get("events") or []
+            events_map = {str(e).strip().lower(): str(e).strip() for e in events_in_mem if isinstance(e, str)}
+
+            parsed_vp = parse_vendor_preferences_by_event(user_message, events_in_mem)
+
+            raw_vp = logistics.get("vendorPreferences") or {}
+            cleaned_vp: dict[str, list[str]] = {}
+
+            if isinstance(raw_vp, dict):
+                for k, v in raw_vp.items():
+                    matched_ev = events_map.get(str(k).strip().lower())
+                    if matched_ev:
+                        if isinstance(v, list):
+                            cleaned_vp[matched_ev] = [str(item).strip() for item in v if str(item).strip()]
+                        elif isinstance(v, str) and v.strip():
+                            cleaned_vp[matched_ev] = [s.strip() for s in v.split(",") if s.strip()]
+
+            for ev_name, v_list in parsed_vp.items():
+                cleaned_vp[ev_name] = v_list
+
+            if cleaned_vp:
+                logistics["vendorPreferences"] = cleaned_vp
+                patch["logistics"] = logistics
+
     # Remove empty nested dicts / empty lists from patch
     patch = _remove_empty(patch)
     return patch
+
+
+def parse_vendor_preferences_by_event(message: str, events: list[str]) -> dict[str, list[str]]:
+    """
+    Parse event-centric vendor preferences string from message into dict[str, list[str]].
+    Format: "Mehndi: Catering, Photography, Mehendi artist; Sangeet: Stage and sound, DJ"
+    """
+    if not message or not isinstance(message, str):
+        return {}
+
+    events_map = {str(e).strip().lower(): str(e).strip() for e in events if isinstance(e, str)}
+    res: dict[str, list[str]] = {}
+
+    sections = re.split(r"[;\n]", message)
+    for sec in sections:
+        if ":" in sec:
+            parts = sec.split(":", 1)
+            raw_ev = parts[0].strip().lower()
+            raw_vendors = parts[1].strip()
+
+            matched_event = events_map.get(raw_ev)
+            if not matched_event:
+                for k_low, k_actual in events_map.items():
+                    if k_low in raw_ev or raw_ev in k_low:
+                        matched_event = k_actual
+                        break
+
+            if matched_event:
+                vendor_list = [v.strip() for v in raw_vendors.split(",") if v.strip()]
+                if vendor_list:
+                    res[matched_event] = vendor_list
+
+    return res
 
 
 def _remove_empty(d: dict) -> dict:

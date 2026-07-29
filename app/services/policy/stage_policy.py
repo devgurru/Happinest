@@ -276,17 +276,20 @@ Also extract into earlySignals:
         "goal": "Capture vendor category priorities per event day.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
-- vendorPreferences: { "category": "preference" }
-  Categories: photography, catering, decor, entertainment, planner, makeup, invitation
+- vendorPreferences: { "EventName": ["Vendor Category 1", "Vendor Category 2"] }
+  Map each event name in memory.logistics.events to its list of selected vendor categories.
+  Only include events listed in memory.logistics.events.
   Examples:
-    { "photography": "candid", "entertainment": "Sufi + Bollywood DJ" }
-    { "catering": "veg + dessert bar", "decor": "floral", "photography": "candid" }
-  Only include categories the user clearly mentions.
+    {
+      "Mehndi": ["Mehendi artist", "Catering", "Décor"],
+      "Sangeet": ["Stage and sound", "Sangeet performers", "DJ and entertainment"],
+      "Haldi": ["Haldi setup", "Catering", "Décor"]
+    }
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.vendors has values in memory AND user confirms →
 extract earlySignals.vendors into validatedPatch.logistics.vendorPreferences.""",
         "requiredFields": ["logistics.vendorPreferences"],
-        "missingFieldsHint": ["vendor category preferences (photography, decor, entertainment, etc.)"],
+        "missingFieldsHint": ["vendor category preferences per wedding event"],
         "advanceCondition": "vendorPreferences has at least one entry",
         "stateless": False,
     },

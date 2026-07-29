@@ -94,6 +94,21 @@ def _extract_brief_artifact_if_present(stage: str, memory: dict, artifact_conten
                 "events": events,
                 "guestCounts": counts,
             }
+    elif stage_val == StageId.S10_VENDORS.value:
+        from app.services.ui.ui_hints import build_vendor_suggestions_by_event
+        logistics = (memory.get("logistics") or {}) if isinstance(memory, dict) else {}
+        events = logistics.get("events") or []
+        counts = logistics.get("guestCounts") or {}
+        budget = logistics.get("budget") or {}
+        vendor_prefs = logistics.get("vendorPreferences") or {}
+        event_suggestions = build_vendor_suggestions_by_event(events)
+        return {
+            "events": events,
+            "guestCounts": counts,
+            "budget": budget,
+            "eventVendorSuggestions": event_suggestions,
+            "vendorPreferences": vendor_prefs,
+        }
     return None
 
 
@@ -1132,7 +1147,7 @@ async def process_conversation_turn(
             correction, stage
         )
         stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
-        if meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
+        if final_decision_type != StageDecisionType.JUMP.value and meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
             final_decision_type = StageDecisionType.REANCHOR.value
             final_stage = stage
     elif StagePolicy.is_stage_complete(stage, memory) and not open_questions:
@@ -1270,7 +1285,6 @@ async def process_conversation_turn(
         StageId.S3_PERSONALITY.value,
         StageId.S4_VIBE.value,
         StageId.S7_EVENTS.value,
-        StageId.S10_VENDORS.value,
     })
     effective_stage = final_stage if final_stage != stage else stage
     if effective_stage not in _CHIP_STAGES or meta_intent == "gibberish":

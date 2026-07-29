@@ -186,6 +186,29 @@ class MemoryService:
                     if "committedSelections" in new_memory and isinstance(new_memory["committedSelections"], dict):
                         new_memory["committedSelections"]["events"] = list(new_events)
 
+        # Synchronize and prune guestCounts & vendorPreferences when logistics.events exists in memory
+        if "logistics" in new_memory and isinstance(new_memory["logistics"], dict):
+            logistics = new_memory["logistics"]
+            events_list = logistics.get("events") or []
+            if isinstance(events_list, list) and events_list:
+                valid_event_set = {str(e).strip().lower() for e in events_list if isinstance(e, str)}
+
+                # 1. Prune guestCounts for deleted events
+                counts = logistics.get("guestCounts")
+                if isinstance(counts, dict):
+                    logistics["guestCounts"] = {
+                        ev: cnt for ev, cnt in counts.items()
+                        if str(ev).strip().lower() in valid_event_set
+                    }
+
+                # 2. Prune vendorPreferences for deleted events
+                vendors = logistics.get("vendorPreferences")
+                if isinstance(vendors, dict):
+                    logistics["vendorPreferences"] = {
+                        ev: v_val for ev, v_val in vendors.items()
+                        if str(ev).strip().lower() in valid_event_set
+                    }
+
 
 
         # Fold legacy top-level occasion fields into occasion.{...}
