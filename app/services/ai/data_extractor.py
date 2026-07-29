@@ -348,12 +348,16 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
                 vibe["secondaryVibes"] = secondary[:3]
             patch["vibe"] = vibe
 
-    # S7: event list confirmation: ensure negation forces eventsConfirmed to False
+    # S7: event list confirmation: set eventsConfirmed to False whenever user adds/updates events or dissents
     if stage == StageId.S7_EVENTS.value:
         logistics = patch.get("logistics") or {}
         if isinstance(logistics, dict):
             msg_low = (user_message or "").strip().lower()
-            if any(re.search(pat, msg_low) for pat in [r"^\s*no\b", r"\bnope\b", r"\bnot yet\b", r"\bwait\b"]):
+            add_or_update = any(re.search(pat, msg_low) for pat in [
+                r"\badd\b", r"\bupdate\b", r"\bchange\b", r"\bdelete\b", r"\bremove\b",
+                r"\bmore\b", r"\banother\b", r"\binclude\b", r"^\s*no\b", r"\bnope\b", r"\bnot yet\b", r"\bwait\b"
+            ])
+            if add_or_update:
                 logistics["eventsConfirmed"] = False
             elif "eventsConfirmed" not in logistics:
                 logistics["eventsConfirmed"] = False

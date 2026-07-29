@@ -203,8 +203,8 @@ Extract into validatedPatch.logistics:
     "haldi"→"Haldi", "engagement"→"Engagement", "nikah"→"Nikah",
     "cocktail"→"Cocktail Party", "wedding ceremony"→"Wedding Ceremony"
 - eventsConfirmed: 
-    * true ONLY when user explicitly confirms/finalizes the list ("yes", "yeah", "yep", "confirm", "looks good", "perfect", "that's all", "only these", "done", "no more")
-    * false when user disagrees, says no, or wants to add/update events ("no", "nope", "not yet", "wait", "add more", "change", "delete")
+    * true ONLY when user explicitly confirms that the event list is COMPLETE and FINAL ("yes that's all", "confirm", "only these", "just these", "done", "no more", "looks good", "perfect").
+    * false whenever user wants to add, update, or change events ("yes I want to add more", "add Sangeet", "update events", "no", "nope", "not yet", "wait", "change").
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.events has values in memory AND user confirms →
 extract earlySignals.events into validatedPatch.logistics.events AND set eventsConfirmed appropriately.
