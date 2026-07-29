@@ -1127,6 +1127,14 @@ async def process_conversation_turn(
         )
         final_stage = stage
         _reason = f"meta_turn_{meta_intent}"
+    elif correction:
+        final_decision_type, final_stage, _reason = resolve_correction_stage_decision(
+            correction, stage
+        )
+        stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
+        if meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
+            final_decision_type = StageDecisionType.REANCHOR.value
+            final_stage = stage
     elif StagePolicy.is_stage_complete(stage, memory) and not open_questions:
         try:
             next_s = StageId(stage).next_stage()
@@ -1137,14 +1145,6 @@ async def process_conversation_turn(
             final_stage = stage
             final_decision_type = StageDecisionType.STAY.value
             _reason = "last_stage_stay"
-    elif correction:
-        final_decision_type, final_stage, _reason = resolve_correction_stage_decision(
-            correction, stage
-        )
-        stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
-        if meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
-            final_decision_type = StageDecisionType.REANCHOR.value
-            final_stage = stage
     else:
         final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
             ai_decision_type, ai_to_stage, stage, memory,

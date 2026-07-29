@@ -86,10 +86,13 @@ def detect_upstream_correction(
         if section in patch and _section_changed(memory_before, memory_after, section):
             changed_sections.append(section)
 
-    # Logistics events change (e.g. adding Sangeet on S8)
+    # Logistics events change vs guestCounts change
     log_before = memory_before.get("logistics") or {}
     log_after = memory_after.get("logistics") or {}
-    if log_before.get("events") != log_after.get("events"):
+    events_changed = log_before.get("events") != log_after.get("events")
+    guests_changed = log_before.get("guestCounts") != log_after.get("guestCounts")
+
+    if events_changed or guests_changed:
         if "logistics" not in changed_sections:
             changed_sections.append("logistics")
 
@@ -101,48 +104,39 @@ def detect_upstream_correction(
     upstream = [
         s for s in changed_sections
         if _section_stage_index(s) < current_idx
+        and not (current_stage == StageId.S8_GUESTS.value and s == "logistics" and not events_changed)
+        and not (current_stage == StageId.S9_BUDGET.value and s == "logistics" and not events_changed and not guests_changed)
     ]
-
-    # Normal first fill of only the current stage's section → not a correction
-    if (
-        stage_section
-        and changed_sections == [stage_section]
-        and not upstream
-    ):
-        return None
-
-    # Occasion-only tweaks while collecting personality/vibe (rehash of place/date)
-    # must not trigger correctionAck / false brief regen
-    if (
-        changed_sections == ["occasion"]
-        and current_stage in (
-            StageId.S3_PERSONALITY.value,
-            StageId.S4_VIBE.value,
-            StageId.S5_BRIEF.value,
-        )
-    ):
-        before_occ = memory_before.get("occasion") or {}
-        after_occ = memory_after.get("occasion") or {}
-        material = False
-        for key in ("place", "datePreference"):
-            b = (before_occ.get(key) or "").strip().lower()
-            a = (after_occ.get(key) or "").strip().lower()
-            if a and a != b:
-                material = True
-                break
-        if not material:
-            return None
 
     mapped = [s for s in changed_sections if s in _SECTION_TO_STAGE]
     if not mapped:
         return None
 
-    earliest = min(mapped, key=lambda s: _section_stage_index(s))
-    target_stage = _SECTION_TO_STAGE[earliest]
+    # Normal first fill / entry of current stage section
+    if (
+        stage_section
+        and changed_sections == [stage_section]
+        and not upstream
+    ):
+        # On S8_GUESTS, filling guest counts is normal stage progression (not a correction)
+        if current_stage == StageId.S8_GUESTS.value and not events_changed:
+            return None
+        # On S9_BUDGET, filling budget is normal stage progression (not a correction)
+        if current_stage == StageId.S9_BUDGET.value and not events_changed and not guests_changed:
+            return None
+
+    if current_stage in (StageId.S8_GUESTS.value, StageId.S9_BUDGET.value) and events_changed:
+        target_stage = StageId.S7_EVENTS.value
+    elif current_stage == StageId.S9_BUDGET.value and guests_changed:
+        target_stage = StageId.S8_GUESTS.value
+    else:
+        earliest = min(mapped, key=lambda s: _section_stage_index(s))
+        target_stage = _SECTION_TO_STAGE[earliest]
+
     stale = compute_stale_sections(patch, memory_before.get("staleSections", []))
 
     # If no stale sections produced and no upstream change, skip
-    if not stale and not upstream and changed_sections == [stage_section]:
+    if not stale and not upstream and changed_sections == [stage_section] and not (events_changed or guests_changed):
         return None
 
     return {
@@ -150,7 +144,7 @@ def detect_upstream_correction(
         "upstreamSections": upstream,
         "targetStage": target_stage,
         "staleSections": stale,
-        "decisionType": StageDecisionType.REANCHOR.value,
+        "decisionType": StageDecisionType.JUMP.value if (current_stage == StageId.S9_BUDGET.value and (events_changed or guests_changed)) else StageDecisionType.REANCHOR.value,
         # Brief regen only when user is ON the brief screen — not S6
         "shouldRegenerateBrief": (
             "brief" in stale
@@ -192,12 +186,34 @@ def resolve_correction_stage_decision(
     current_stage: str,
 ) -> tuple[str, str, str]:
     """
-    Prefer reanchor on current stage (Example 3/5).
+    Determine target stage and decision type when a correction or upstream update occurs.
 
-    JUMP is reserved for rare cases where product explicitly wants to move
-    the guided shell — default path keeps the conversation continuous.
+    Specific S7 / S8 / S9 Jump & Re-anchor Rules:
+    1. On S9 (S9_BUDGET):
+       - If events list (S7 data) was modified: JUMP back to S7_EVENTS to acknowledge change.
+       - If guest counts (S8 data) were modified: JUMP back to S8_GUESTS to update counts.
+    2. On S8 (S8_GUESTS):
+       - If events list (S7 data) was modified: REANCHOR on S8_GUESTS to request guest count for new event.
+    3. Other upstream corrections:
+       - If targetStage is earlier than current_stage, return (JUMP/REANCHOR, targetStage).
     """
-    # Docs: keep conversational, do not force user backward
+    target_stage = (correction or {}).get("targetStage") or current_stage
+
+    # Rule 1: On S9 (S9_BUDGET)
+    if current_stage == StageId.S9_BUDGET.value:
+        if target_stage == StageId.S7_EVENTS.value:
+            return (StageDecisionType.JUMP.value, StageId.S7_EVENTS.value, "events_updated_on_s9_jump_s7")
+        elif target_stage == StageId.S8_GUESTS.value:
+            return (StageDecisionType.JUMP.value, StageId.S8_GUESTS.value, "guest_counts_updated_on_s9_jump_s8")
+
+    # Rule 2: On S8 (S8_GUESTS)
+    if current_stage == StageId.S8_GUESTS.value:
+        if target_stage in (StageId.S7_EVENTS.value, StageId.S8_GUESTS.value):
+            return (StageDecisionType.REANCHOR.value, StageId.S8_GUESTS.value, "events_updated_on_s8_reanchor_s8")
+
+    if target_stage != current_stage and (correction or {}).get("decisionType") == StageDecisionType.JUMP.value:
+        return (StageDecisionType.JUMP.value, target_stage, "upstream_correction_jump")
+
     return (
         StageDecisionType.REANCHOR.value,
         current_stage,
