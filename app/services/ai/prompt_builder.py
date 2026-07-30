@@ -2,7 +2,7 @@
 Prompt Builder — assembles LLM messages for each pipeline call.
 
 Call 1: build_data_extraction_prompt  → data_extraction.txt
-Call 2: build_response_planner_prompt → conversation_turn.txt
+Call 2: build_response_planner_prompt → conversation_planner.txt
 
 Synthesis prompts (unchanged):
   build_brief_synthesis_prompt
@@ -207,67 +207,44 @@ def build_response_planner_prompt(
     """
     from datetime import date as _date
 
-    template = _load_template("conversation_turn")
+    template = _load_template("conversation_planner")
     chip_pool_str = format_chip_pool_for_prompt(stage)
     history, _last = _history_and_last_reply(recent_messages, limit=8)
 
-    # Build human-readable status line
-    if ctx.stage_status == "complete":
-        status_str = f"COMPLETE → advancing to {ctx.next_stage or 'next stage'}"
-    elif ctx.stage_status == "past_date_rejected":
-        status_str = f"PAST DATE REJECTED: User mentioned '{ctx.rejected_date}' which is in the past"
-    elif ctx.stage_status == "needs_early_signal_confirm":
-        status_str = "FIRST TURN ON STAGE — early signals need confirmation"
-    elif ctx.stage_status == "meta":
-        status_str = f"META TURN: {ctx.meta_intent}"
-    elif ctx.stage_status == "reanchor":
-        status_str = f"REANCHOR — correcting: {ctx.corrected_section}"
-    else:
-        status_str = f"INCOMPLETE — still collecting data"
-
-    # Build missing fields line (only when staying with specific missing fields)
+    # Missing fields — plain string, only when staying
     if ctx.stage_status == "past_date_rejected":
-        missing_line = (
-            f"IMPORTANT RULE: User mentioned '{ctx.rejected_date or 'a past date'}', which is in the past (today is {_date.today().strftime('%B %Y')}). "
-            f"Politely tell the couple that this date has already passed. Ask them to choose a future month and year (e.g., June 2027) or a season (e.g. Winter 2026/2027). "
-            f"DO NOT confirm, accept, or save the past date!"
+        missing_fields_str = (
+            f"Date mentioned ('{ctx.rejected_date}') is in the past (today is {_date.today().strftime('%B %Y')}). "
+            f"Tell them it has passed and ask for a future month/year or season instead."
         )
     elif ctx.missing_fields and ctx.stage_status in ("incomplete", "reanchor"):
-        missing_line = f"Ask ONLY for: {', '.join(ctx.missing_fields)}"
+        missing_fields_str = ", ".join(ctx.missing_fields)
     else:
-        missing_line = ""
+        missing_fields_str = "(nothing — stage is complete or a meta turn)"
 
+    # Early signal line — raw context for the AI to reason from naturally
+    early_signal_line = ctx.early_signal_summary or "(none)"
 
-    # Early signal line
-    early_signal_line = ""
-    if ctx.stage_status == "needs_early_signal_confirm" and ctx.early_signal_summary:
-        early_signal_line = f"Early signal confirmation needed: {ctx.early_signal_summary}"
-    elif ctx.early_signal_summary:
-        early_signal_line = ctx.early_signal_summary
-
-    # Stage decision JSON — safe for template substitution
+    # Stage decision JSON — authoritative, passed as-is
     stage_decision_json = json.dumps(ctx.stage_decision)
 
-    # Confirmed patch JSON — what the AI should copy into memoryPatch
-    # We re-serialize to ensure clean JSON
+    # Confirmed patch JSON — what was just extracted and committed
     confirmed_patch_json = json.dumps(ctx.confirmed_data, indent=2) if ctx.confirmed_data else "{}"
 
     system_content = template.safe_substitute(
         stage=stage,
         current_date=_date.today().strftime("%B %Y"),
         client_names=_client_names(memory),
-        extraction_summary=ctx.extraction_summary or "(no specific data extracted this turn)",
-        stage_status=status_str,
-        decision=ctx.decision,
-        missing_line=missing_line,
+        extraction_summary=ctx.extraction_summary or "(nothing specific captured this turn — meta or clarification turn)",
         early_signal_line=early_signal_line,
+        confirmed_patch_json=confirmed_patch_json,
+        missing_fields=missing_fields_str,
         memory_slim=json.dumps(_slim_memory(memory, stage), indent=2),
         history=history,
-        chip_pool_reference=chip_pool_str or "None for this stage",
-        confirmed_patch_json=confirmed_patch_json,
         stage_decision_json=stage_decision_json,
-        image_block=_image_turn_rules_block(image_context),
+        chip_pool_reference=chip_pool_str or "None for this stage",
         already_selected_chips=_already_selected_chips_str(memory),
+        image_block=_image_turn_rules_block(image_context),
     )
 
     json_reminder = "[Respond ONLY with one valid JSON object. No markdown.]\n\n"
