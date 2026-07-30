@@ -207,11 +207,20 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
             if not occ_patch.get("locationPreference") and not occ_patch.get("place"):
                 occ_patch["locationPreference"] = inferred_country
 
+        has_identity_update = bool(
+            patch.get("identity")
+            and (patch["identity"].get("groomName") or patch["identity"].get("brideName"))
+        ) or raw_meta == "correction"
+
         is_country_query = bool(inferred_country)
-        is_gibberish_turn = not is_country_query and (
-            raw_meta == "gibberish"
-            or extracted_level == "L0"
-            or (bool(msg_text) and looks_like_gibberish(msg_text))
+        is_gibberish_turn = (
+            not is_country_query
+            and not has_identity_update
+            and (
+                raw_meta == "gibberish"
+                or extracted_level == "L0"
+                or (bool(msg_text) and looks_like_gibberish(msg_text))
+            )
         )
 
         prior_spec_level = memory_occ.get("specificityLevel") or classify_s2_info_level(memory_occ)

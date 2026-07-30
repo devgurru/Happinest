@@ -132,6 +132,8 @@ def detect_upstream_correction(
     else:
         earliest = min(mapped, key=lambda s: _section_stage_index(s))
         target_stage = _SECTION_TO_STAGE[earliest]
+        if target_stage == StageId.S1_NAMES.value:
+            target_stage = current_stage if current_stage != StageId.S1_NAMES.value else StageId.S2_BASICS.value
 
     stale = compute_stale_sections(patch, memory_before.get("staleSections", []))
 

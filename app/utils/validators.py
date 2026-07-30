@@ -365,6 +365,14 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
         return "IL1_FLEXIBLE"
 
     if not place and not setting and not location_pref and not date_pref and not season_pref:
+        # Check if this turn is an identity/name update turn
+        has_name_kw = any(kw in msg_l for kw in ("name is", "names are", "my name", "our names", "i am", "we are"))
+        has_identity_patch = bool(
+            isinstance(memory_or_patch.get("identity"), dict)
+            and (memory_or_patch["identity"].get("groomName") or memory_or_patch["identity"].get("brideName"))
+        )
+        if has_name_kw or has_identity_patch:
+            return "IL1_FLEXIBLE"
         if msg_l and looks_like_gibberish(msg_l):
             return "L0"
         return "L0"
