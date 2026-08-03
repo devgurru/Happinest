@@ -377,8 +377,6 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
             events = (memory.get("logistics") or {}).get("events") or []
             if not events:
                 missing.append("wedding functions/events")
-            elif not (memory.get("logistics") or {}).get("eventsConfirmed"):
-                missing.append("confirmation that event list is complete (say 'that's all')")
             return missing
         if stage == StageId.S8_GUESTS.value:
             events = (memory.get("logistics") or {}).get("events") or []

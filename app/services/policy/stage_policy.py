@@ -216,9 +216,9 @@ Also extract into earlySignals:
 Reject (rejectedReasons):
 - Colors, aesthetics, decor as events
 - Personality or vibe data as events""",
-        "requiredFields": ["logistics.events", "logistics.eventsConfirmed"],
-        "missingFieldsHint": ["wedding functions/events", "confirmation that list is final (say 'that's all')"],
-        "advanceCondition": "1+ events listed AND user confirmed the list is complete",
+        "requiredFields": ["logistics.events"],
+        "missingFieldsHint": ["wedding functions/events"],
+        "advanceCondition": "1+ events listed",
         "stateless": False,
     },
 
@@ -424,9 +424,7 @@ class StagePolicy:
         if stage_id == StageId.S7_EVENTS:
             logistics = memory.get("logistics", {}) or {}
             events = logistics.get("events") or []
-            if len(events) < 1:
-                return False
-            return bool(logistics.get("eventsConfirmed"))
+            return len(events) >= 1
 
         if stage_id == StageId.S8_GUESTS:
             events = memory.get("logistics", {}).get("events") or []

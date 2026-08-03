@@ -253,55 +253,61 @@ def build_ui_suggestions(
 ) -> list[str]:
     """
     Return clean string suggestions (labels) for the frontend chip UI.
+
+    AI-first: trusts and returns AI-generated suggestions directly — BUT only
+    when the AI was generating chips FOR the correct stage.
+
+    When advancing (for_stage != stage), the AI generated chips for the old
+    stage, so we discard them and build chips for the target (for_stage) instead.
+
     `for_stage` lets us attach chips for the stage we are advancing into.
-    Excludes any chip labels already selected in memory.
+    Always excludes chip labels already selected in memory.
     """
     display_stage = for_stage or stage
+    already_selected = _already_selected_chips_for_stage(display_stage, memory)
 
+    # When advancing: AI chips were generated for `stage` (old stage), not
+    # `for_stage` (new stage). Discard them — they are wrong-stage chips.
+    is_advancing = for_stage and for_stage != stage
+
+    if not is_advancing:
+        # 1. AI suggestions — primary source, trust them (same stage as AI was on)
+        ai_labels = [
+            lbl for lbl in _labels_from_ai(ai_suggestions)
+            if lbl.lower() not in already_selected
+            and 2 <= len(lbl) <= 50
+        ]
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for lbl in ai_labels:
+            if lbl.lower() not in seen:
+                seen.add(lbl.lower())
+                deduped.append(lbl)
+        if deduped:
+            return deduped[:6]
+    else:
+        seen: set[str] = set()
+
+    # 2. Fallback for S2 (when AI returns [] or we are advancing away from S2)
     if display_stage == StageId.S2_BASICS.value:
         return build_s2_location_suggestions(memory)
 
-    already_selected = _already_selected_chips_for_stage(display_stage, memory)
-
+    # 3. Fallback for other chip stages (advancing, synthesis paths, or empty AI output)
     if display_stage not in CHIP_STAGES:
-        return [lbl for lbl in _labels_from_ai(ai_suggestions) if lbl.lower() not in already_selected]
+        return []
 
     pool = _pool_for_stage(display_stage, memory)
     if not pool:
-        return [lbl for lbl in _labels_from_ai(ai_suggestions) if lbl.lower() not in already_selected]
+        return []
 
-    pool_set = {c.lower(): c for c in pool}
-    selected: list[str] = []
-    allow_custom = prefer_custom or display_stage in (
-        StageId.S3_PERSONALITY.value,
-        StageId.S4_VIBE.value,
-    )
-
-    for label in _labels_from_ai(ai_suggestions):
-        lbl_low = label.lower()
-        if lbl_low in already_selected:
-            continue
-        canonical = pool_set.get(lbl_low)
-        if canonical:
-            if canonical.lower() not in {s.lower() for s in selected}:
-                selected.append(canonical)
-        elif allow_custom and 2 <= len(label) <= 40:
-            if lbl_low not in {s.lower() for s in selected}:
-                selected.append(label)
-        if prefer_custom and len(selected) >= 6:
+    fallback = []
+    for chip in _contextual_chip_order(display_stage, memory, pool):
+        if chip.lower() not in already_selected and chip.lower() not in seen:
+            fallback.append(chip)
+            seen.add(chip.lower())
+        if len(fallback) >= 6:
             break
-
-    if not prefer_custom or len(selected) < 3:
-        for chip in _contextual_chip_order(display_stage, memory, pool):
-            chip_low = chip.lower()
-            if chip_low in already_selected:
-                continue
-            if chip_low not in {s.lower() for s in selected}:
-                selected.append(chip)
-            if len(selected) >= 6:
-                break
-
-    return selected[:6]
+    return fallback
 
 
 

@@ -357,9 +357,6 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
     season_pref = (occ.get("seasonPreference") or "").strip()
     spec_level = (occ.get("specificityLevel") or "").strip().upper()
 
-    if spec_level == "IL1_FLEXIBLE":
-        return "IL1_FLEXIBLE"
-
     combined_text = f"{place} {setting} {location_pref} {date_pref} {season_pref} {msg_l}".lower()
     if any(phrase in combined_text for phrase in S2_FLEXIBLE_PHRASES):
         return "IL1_FLEXIBLE"
@@ -372,6 +369,8 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
             and (memory_or_patch["identity"].get("groomName") or memory_or_patch["identity"].get("brideName"))
         )
         if has_name_kw or has_identity_patch:
+            return "IL1_FLEXIBLE"
+        if spec_level == "IL1_FLEXIBLE":
             return "IL1_FLEXIBLE"
         if msg_l and looks_like_gibberish(msg_l):
             return "L0"
@@ -424,7 +423,7 @@ def get_occasion_state(memory: dict, user_message: str = "") -> dict:
     has_place = bool(place)
     has_time = is_concrete_timing(occ)
 
-    spec_level = occ.get("specificityLevel") or classify_s2_info_level(occ, user_message=user_message)
+    spec_level = classify_s2_info_level(occ, user_message=user_message)
 
     if spec_level == "L0":
         is_complete = False
