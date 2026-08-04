@@ -35,7 +35,6 @@ CHIP_POOLS: dict[str, list[str]] = {
         "Big & festive",
         "Intimate",
         "Family-led",
-        "Still figuring out",
         "Whimsical & playful",
         "Modern & sleek",
         "Traditional & rooted",
@@ -46,6 +45,7 @@ CHIP_POOLS: dict[str, list[str]] = {
         "Maximalist",
         "Relaxed & easy",
         "Dramatic & theatrical",
+        "Still figuring out",
     ],
 
     # S7 — Events / Functions
