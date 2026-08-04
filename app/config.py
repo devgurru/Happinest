@@ -23,21 +23,14 @@ class Settings(BaseSettings):
         return normalize_database_url(v)
 
     # ─── LLM provider switch ──────────────────────────────────────────────────
-    # "ollama" = local Gemma via Ollama
     # "grok"   = xAI Grok cloud API (console.x.ai) — keys usually xai-...
     # "groq"   = Groq cloud API (console.groq.com) — keys usually gsk_...
-    LLM_PROVIDER: str = "ollama"
+    # "openai" = OpenAI API (platform.openai.com)
+    LLM_PROVIDER: str = "openai"
 
     # Shared LLM request knobs (apply to whichever provider is active)
     LLM_TIMEOUT_SECONDS: float = 120.0
     LLM_MAX_RETRIES: int = 1
-
-    # Ollama — local chat (used when LLM_PROVIDER=ollama)
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "gemma3:latest"
-    # Backward-compat aliases (still honored if set in older .env files)
-    OLLAMA_TIMEOUT_SECONDS: float | None = None
-    OLLAMA_MAX_RETRIES: int | None = None
 
     # Grok / xAI — cloud chat (used when LLM_PROVIDER=grok)
     GROK_API_KEY: str = ""
@@ -52,15 +45,15 @@ class Settings(BaseSettings):
     # Vision model — used for image analysis (multimodal)
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 
-    # Embeddings — supports "ollama" (nomic-embed-text) or "openai" (text-embedding-3-small)
-    EMBEDDING_PROVIDER: str = "ollama"
-    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+    # OpenAI — cloud chat + embeddings
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_VISION_MODEL: str = "gpt-4o"
 
+    # Embeddings — uses OpenAI text-embedding-3-small
+    EMBEDDING_PROVIDER: str = "openai"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     # App
     DEBUG: bool = False
@@ -82,23 +75,19 @@ class Settings(BaseSettings):
 
     @property
     def llm_provider(self) -> str:
-        provider = (self.LLM_PROVIDER or "ollama").strip().lower()
+        provider = (self.LLM_PROVIDER or "openai").strip().lower()
         if provider in ("xai", "x-ai"):
             return "grok"
-        if provider not in ("ollama", "grok", "groq", "openai"):
-            return "ollama"
+        if provider not in ("grok", "groq", "openai"):
+            return "openai"
         return provider
 
     @property
     def llm_timeout_seconds(self) -> float:
-        if self.OLLAMA_TIMEOUT_SECONDS is not None:
-            return float(self.OLLAMA_TIMEOUT_SECONDS)
         return float(self.LLM_TIMEOUT_SECONDS)
 
     @property
     def llm_max_retries(self) -> int:
-        if self.OLLAMA_MAX_RETRIES is not None:
-            return int(self.OLLAMA_MAX_RETRIES)
         return int(self.LLM_MAX_RETRIES)
 
     @property
@@ -107,19 +96,16 @@ class Settings(BaseSettings):
             return self.GROK_MODEL
         if self.llm_provider == "groq":
             return self.GROQ_MODEL
-        if self.llm_provider == "openai":
-            return self.OPENAI_MODEL
-        return self.OLLAMA_MODEL
+        return self.OPENAI_MODEL
 
     @property
     def active_vision_model(self) -> str:
-        """Model used for image analysis (multimodal). Groq/OpenAI/Ollama."""
+        """Model used for image analysis (multimodal). Groq/OpenAI/Grok."""
         if self.llm_provider == "groq":
             return self.GROQ_VISION_MODEL
-        if self.llm_provider == "openai":
-            return self.OPENAI_VISION_MODEL
-        # Ollama vision model if local — assumes llava or gemma3 vision variant
-        return self.OLLAMA_MODEL
+        if self.llm_provider == "grok":
+            return self.GROK_MODEL
+        return self.OPENAI_VISION_MODEL
 
 
 settings = Settings()
