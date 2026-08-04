@@ -17,33 +17,37 @@ class SuggestionSchema(BaseModel):
     category: str | None = None
 
 
-def normalize_suggestions(raw: list) -> list["SuggestionSchema"]:
-    """Convert AI suggestion output (strings or dicts) to SuggestionSchema."""
+def normalize_suggestions(raw: list) -> list[str]:
+    """Convert AI suggestion output (strings or dicts) to list of clean label strings."""
     result = []
     for item in raw:
-        if isinstance(item, str):
-            result.append(SuggestionSchema(label=item, category=None))
+        if isinstance(item, str) and item.strip():
+            if item.strip() not in result:
+                result.append(item.strip())
         elif isinstance(item, dict):
-            result.append(SuggestionSchema(
-                label=item.get("label", ""),
-                category=item.get("category"),
-            ))
+            lbl = item.get("label", "")
+            if isinstance(lbl, str) and lbl.strip() and lbl.strip() not in result:
+                result.append(lbl.strip())
     return result
+
 
 class PlannerNotesView(BaseModel):
     couple: str = ""
     occasion: str = ""
+    personality: str = ""
     feeling: str = ""
+    brief: str = ""
     direction: str = ""
     plan: str = ""
 
 
 class SelectedChipsView(BaseModel):
-    personality: list[str] = []
-    vibe: list[str] = []
-    events: list[str] = []
-    directionId: str = ""
-    directionName: str = ""
+    personality: list[str] | None = None
+    vibe: list[str] | None = None
+    events: list[str] | None = None
+    directionId: str | None = None
+    directionName: str | None = None
+
 
 
 class PlannerResponse(BaseModel):
@@ -51,16 +55,15 @@ class PlannerResponse(BaseModel):
     sessionId: str
     responseSource: str
     plannerReply: str
-    memoryPatch: dict[str, Any] = {}
     updatedMemoryVersion: int | None = None
     stageDecision: StageDecisionSchema
-    staleSections: list[str] = []
     openQuestions: list[Any] = []
-    suggestions: list[SuggestionSchema] = []
+    suggestions: list[str] = []
     selectedChips: SelectedChipsView | None = None
     plannerNotesView: PlannerNotesView
     artifactContent: dict[str, Any] | None = None
     errorCode: str | None = None
+
 
 
 # ── Session ──────────────────────────────────────────────────────────────────

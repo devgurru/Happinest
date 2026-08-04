@@ -20,7 +20,7 @@ DEFAULT_PLANNER_MEMORY: dict = {
         "datePreference": "",
         "seasonPreference": "",
         "destinationMode": "unknown",
-        "isConfirmed": False,
+        "specificityLevel": "",
     },
     "personality": {
         "tags": [],
@@ -129,33 +129,52 @@ def resolve_primary_vibe(memory: dict) -> str:
     return ""
 
 
-def build_selected_chips(memory: dict) -> dict:
+def _norm_chip(s: str) -> str:
+    """Normalize string for deduplication (case-insensitive, & vs and)."""
+    import re
+    return re.sub(r"\s+", " ", s.lower().replace("&", " and ")).strip()
+
+
+def build_selected_chips(memory: dict, stage: str | None = None) -> dict:
     """
-    Committed chip selections derived from canonical memory.
-    Used for UI restore after page reload.
+    Committed chip selections derived from canonical memory and earlySignals.
+    If `stage` is provided, returns stage-scoped selected chips for turn response.
     """
+    from app.domain.enums import StageId
     from app.utils.validators import filter_tags, is_valid_primary_vibe, normalize_primary_vibe
 
     personality = memory.get("personality", {})
     vibe = memory.get("vibe", {})
     logistics = memory.get("logistics", {})
     direction = memory.get("direction", {})
+    early = memory.get("earlySignals") or {}
     committed = memory.get("committedSelections", {})
 
+    # Personality tags (deduplicated)
+    p_tags = list(personality.get("tags") or [])
+    for tag in (early.get("personality") or []) + (committed.get("personality") or []):
+        if isinstance(tag, str) and tag.strip():
+            if _norm_chip(tag) not in {_norm_chip(t) for t in p_tags}:
+                p_tags.append(tag.strip())
+    personality_tags = filter_tags(p_tags)
+
+    # Vibe chips (deduplicated across & vs and)
     vibe_chips = []
     primary = resolve_primary_vibe(memory)
     if primary:
         vibe_chips.append(primary)
-    for s in vibe.get("secondaryVibes") or []:
+    for s in (vibe.get("secondaryVibes") or []) + (early.get("vibe") or []) + (committed.get("vibe") or []):
         if isinstance(s, str) and is_valid_primary_vibe(s):
             mapped = normalize_primary_vibe(s) or s
-            if mapped.lower() not in {v.lower() for v in vibe_chips}:
+            if _norm_chip(mapped) not in {_norm_chip(v) for v in vibe_chips}:
                 vibe_chips.append(mapped)
-    if not vibe_chips:
-        for chip in committed.get("vibe") or []:
-            if isinstance(chip, str) and is_valid_primary_vibe(chip):
-                mapped = normalize_primary_vibe(chip) or chip
-                vibe_chips.append(mapped)
+
+    # Events (deduplicated)
+    event_list = list(logistics.get("events") or [])
+    for ev in (early.get("events") or []) + (committed.get("events") or []):
+        if isinstance(ev, str) and ev.strip():
+            if _norm_chip(ev) not in {_norm_chip(e) for e in event_list}:
+                event_list.append(ev.strip())
 
     selected_id = direction.get("selectedDirectionId") or committed.get("directionId", "")
     direction_name = committed.get("directionName", "")
@@ -165,17 +184,31 @@ def build_selected_chips(memory: dict) -> dict:
                 direction_name = opt.get("name", "")
                 break
 
-    personality_tags = filter_tags(
-        personality.get("tags") or committed.get("personality", [])
-    )
-
-    return {
+    full_chips = {
         "personality": personality_tags,
         "vibe": vibe_chips,
-        "events": logistics.get("events") or committed.get("events", []),
+        "events": event_list,
         "directionId": selected_id,
         "directionName": direction_name,
     }
+
+    if not stage:
+        return full_chips
+
+    # Stage-scoped filtering for turn responses:
+    if stage in ("s3_personality", StageId.S3_PERSONALITY.value):
+        return {"personality": personality_tags}
+    elif stage in ("s4_vibe", StageId.S4_VIBE.value):
+        return {"vibe": vibe_chips}
+    elif stage in ("s7_events", StageId.S7_EVENTS.value):
+        return {"events": event_list}
+    elif stage in ("s6_directions", StageId.S6_DIRECTIONS.value):
+        return {"directionId": selected_id, "directionName": direction_name}
+
+    # Stages without stage-specific chips (s1_names, s2_basics, s5_brief, s8_guests, etc.)
+    return {}
+
+
 
 
 def update_committed_selections(memory: dict, patch: dict) -> dict:
@@ -218,22 +251,32 @@ def build_planner_notes_view(memory: dict) -> dict:
     """
     identity = memory.get("identity", {})
     occasion = memory.get("occasion", {})
+    personality = memory.get("personality", {})
     vibe = memory.get("vibe", {})
+    brief_obj = memory.get("brief", {})
     direction = memory.get("direction", {})
     logistics = memory.get("logistics", {})
+    early = memory.get("earlySignals") or {}
+    committed = memory.get("committedSelections") or {}
 
     client = identity.get("groomName", "")
     partner = identity.get("brideName", "")
-
     couple = f"{client} & {partner}" if client and partner else client or partner or ""
 
     place = occasion.get("place", "")
     date = occasion.get("datePreference", "")
     occ = ", ".join(filter(None, [place, date]))
 
+    p_tags = list(personality.get("tags") or [])
+    if not p_tags:
+        p_tags = list(early.get("personality") or []) or list(committed.get("personality") or [])
+    personality_str = ", ".join(p_tags) if isinstance(p_tags, list) else ""
+
     primary_vibe = resolve_primary_vibe(memory)
     vibe_interp = vibe.get("plannerInterpretation", "")
     feeling = primary_vibe or vibe_interp or ""
+
+    brief_text = brief_obj.get("text", "") if isinstance(brief_obj, dict) else ""
 
     direction_name = ""
     selected_id = direction.get("selectedDirectionId", "")
@@ -245,7 +288,7 @@ def build_planner_notes_view(memory: dict) -> dict:
                     direction_name = opt.get("name", "")
                     break
     if not direction_name:
-        direction_name = memory.get("committedSelections", {}).get("directionName", "")
+        direction_name = committed.get("directionName", "")
 
     events = logistics.get("events", [])
     guest_counts = logistics.get("guestCounts", {})
@@ -264,7 +307,10 @@ def build_planner_notes_view(memory: dict) -> dict:
     return {
         "couple": couple,
         "occasion": occ,
+        "personality": personality_str,
         "feeling": feeling,
+        "brief": brief_text,
         "direction": direction_name,
         "plan": " · ".join(plan_parts),
     }
+

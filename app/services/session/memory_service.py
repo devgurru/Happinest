@@ -30,11 +30,11 @@ _INVALIDATION_MAP: dict[str, list[str]] = {
 VALID_STALE = {s.value for s in StaleSectionId}
 
 
-def deep_merge(base: dict, patch: dict) -> dict:
+def deep_merge(base: dict, patch: dict, is_correction: bool = False) -> dict:
     """
     Recursively merge patch into base.
     - Dict values are merged recursively
-    - List values in patch REPLACE (not extend) base lists
+    - List values in patch MERGE (extend & deduplicate) with base lists unless is_correction is True
     - None / empty-string patch values are skipped
     """
     result = copy.deepcopy(base)
@@ -42,10 +42,31 @@ def deep_merge(base: dict, patch: dict) -> dict:
         if val is None:
             continue
         if isinstance(val, dict) and isinstance(result.get(key), dict):
-            result[key] = deep_merge(result[key], val)
+            result[key] = deep_merge(result[key], val, is_correction=is_correction)
+        elif isinstance(val, list) and isinstance(result.get(key), list) and not is_correction:
+            existing = copy.deepcopy(result[key])
+            for item in val:
+                if item not in existing and (not isinstance(item, str) or item.strip()):
+                    existing.append(copy.deepcopy(item))
+            result[key] = existing
         else:
             result[key] = copy.deepcopy(val)
+
+    # Safety check: If occasion.place exists in merged memory, ensure country is updated to match the place
+    if "occasion" in patch and isinstance(result.get("occasion"), dict):
+        occ = result["occasion"]
+        place = (occ.get("place") or "").strip()
+        if place:
+            from app.utils.validators import infer_country_from_place
+            inferred = infer_country_from_place(place)
+            patch_country = (patch.get("occasion", {}).get("country") or "").strip()
+            if patch_country:
+                occ["country"] = patch_country
+            elif inferred:
+                occ["country"] = inferred
+
     return result
+
 
 
 def compute_stale_sections(patch: dict, current_stale: list[str]) -> list[str]:
@@ -99,9 +120,11 @@ class MemoryService:
         db: AsyncSession,
         session: Session,
         patch: dict,
-        request_id: uuid.UUID | None = None,
+        *,
+        request_id: uuid.UUID | str,
         open_questions: list | None = None,
         extra_stale: list[str] | None = None,
+        is_correction: bool = False,
     ) -> SessionMemoryVersion:
         """
         Apply a validated patch to canonical memory.
@@ -116,7 +139,77 @@ class MemoryService:
         patch["committedSelections"] = update_committed_selections(current.memory_json, patch)
 
         # Merge
-        new_memory = deep_merge(current.memory_json, patch)
+        is_corr = bool(
+            is_correction or
+            patch.get("is_correction") or
+            patch.get("metaIntent") == "correction"
+        )
+        new_memory = deep_merge(current.memory_json, patch, is_correction=is_corr)
+
+        # On correction turn, clean removed items from earlySignals and committedSelections
+        if is_corr:
+            if "personality" in patch and isinstance(patch["personality"], dict):
+                new_tags = patch["personality"].get("tags")
+                if isinstance(new_tags, list):
+                    new_tags_lower = {t.lower() for t in new_tags if isinstance(t, str)}
+                    if "earlySignals" in new_memory and isinstance(new_memory["earlySignals"], dict):
+                        early_p = new_memory["earlySignals"].get("personality") or []
+                        new_memory["earlySignals"]["personality"] = [
+                            t for t in early_p if isinstance(t, str) and t.lower() in new_tags_lower
+                        ]
+                    if "committedSelections" in new_memory and isinstance(new_memory["committedSelections"], dict):
+                        new_memory["committedSelections"]["personality"] = list(new_tags)
+
+            if "vibe" in patch and isinstance(patch["vibe"], dict):
+                vibe_patch = patch["vibe"]
+                primary = vibe_patch.get("primaryVibe")
+                secondaries = vibe_patch.get("secondaryVibes") or []
+                all_vibes = ([primary] if primary else []) + (secondaries if isinstance(secondaries, list) else [])
+                all_vibes_lower = {v.lower() for v in all_vibes if isinstance(v, str)}
+                if "earlySignals" in new_memory and isinstance(new_memory["earlySignals"], dict):
+                    early_v = new_memory["earlySignals"].get("vibe") or []
+                    new_memory["earlySignals"]["vibe"] = [
+                        v for v in early_v if isinstance(v, str) and v.lower() in all_vibes_lower
+                    ]
+                if "committedSelections" in new_memory and isinstance(new_memory["committedSelections"], dict):
+                    new_memory["committedSelections"]["vibe"] = list(all_vibes)
+
+            if "logistics" in patch and isinstance(patch["logistics"], dict) and "events" in patch["logistics"]:
+                new_events = patch["logistics"].get("events") or []
+                if isinstance(new_events, list):
+                    new_events_lower = {e.lower() for e in new_events if isinstance(e, str)}
+                    if "earlySignals" in new_memory and isinstance(new_memory["earlySignals"], dict):
+                        early_e = new_memory["earlySignals"].get("events") or []
+                        new_memory["earlySignals"]["events"] = [
+                            e for e in early_e if isinstance(e, str) and e.lower() in new_events_lower
+                        ]
+                    if "committedSelections" in new_memory and isinstance(new_memory["committedSelections"], dict):
+                        new_memory["committedSelections"]["events"] = list(new_events)
+
+        # Synchronize and prune guestCounts & vendorPreferences when logistics.events exists in memory
+        if "logistics" in new_memory and isinstance(new_memory["logistics"], dict):
+            logistics = new_memory["logistics"]
+            events_list = logistics.get("events") or []
+            if isinstance(events_list, list) and events_list:
+                valid_event_set = {str(e).strip().lower() for e in events_list if isinstance(e, str)}
+
+                # 1. Prune guestCounts for deleted events
+                counts = logistics.get("guestCounts")
+                if isinstance(counts, dict):
+                    logistics["guestCounts"] = {
+                        ev: cnt for ev, cnt in counts.items()
+                        if str(ev).strip().lower() in valid_event_set
+                    }
+
+                # 2. Prune vendorPreferences for deleted events
+                vendors = logistics.get("vendorPreferences")
+                if isinstance(vendors, dict):
+                    logistics["vendorPreferences"] = {
+                        ev: v_val for ev, v_val in vendors.items()
+                        if str(ev).strip().lower() in valid_event_set
+                    }
+
+
 
         # Fold legacy top-level occasion fields into occasion.{...}
         from app.utils.validators import get_occasion_state

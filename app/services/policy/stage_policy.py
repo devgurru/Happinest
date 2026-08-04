@@ -53,24 +53,29 @@ from app.domain.enums import (
 STAGE_CONFIG: dict[str, dict] = {
 
     StageId.S2_BASICS.value: {
-        "goal": "Capture where and when the wedding will be. Advance when we have a real place + future date/season.",
+        "goal": "Capture where and when the wedding will be. Advance when location/timing is confirmed or kept flexible.",
         "extractionRules": """\
 IMPORTANT: Even if metaIntent is "correction" (e.g. correcting names), STILL extract ALL S2 fields below.
 
+SPECIFICITY LEVEL (output validationNotes.specificityLevel):
+- L0: Junk / unusable (e.g. "kgjhgjkh ghjghj", "123123") → set metaIntent = "gibberish"
+- IL1: Broad setting/timing (e.g. "beach destination in winter of 26", "royal palace wedding sometime next year")
+- IL1_FLEXIBLE: Flexible consent / non-committal (e.g. "nothing finalized", "not sure", "keep it flexible", "decide later")
+  → set validatedPatch.occasion.specificityLevel = "IL1_FLEXIBLE"
+- IL2: Refined region & month (e.g. "East Asia in Dec 26", "Thailand or Bali in December 2026", "Rajasthan palace in Feb 2026")
+- IL3: Exact city & dates (e.g. "Goa, Dec 18-20 2026", "Udaipur, Feb 12-14 2026", "Phuket first week of December 2026")
+
 Extract into validatedPatch.occasion (only fields that are mentioned):
-- place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "Lahore Fort", "Dubai")
+- place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "East Asia", "Thailand or Bali", "Udaipur")
   → In validationNotes.resolvedCountry: identify the country
     Examples: "Lahore Fort" → Pakistan, "Delhi" → India, "Dubai" → UAE, "Goa" → India
-  → In validationNotes.isValidLocation: false ONLY for clearly fictional/impossible places
 - datePreference: future date (day+month+year, month+year, or year) — MUST preserve exact day/month when provided
   → TODAY IS: July 2026
-  → "12 June 2028" → "12 June 2028"  (preserve exact day, month, and year)
-  → "June 12, 2028" → "12 June 2028"
-  → "next year June" → "June 2027"  (next year from July 2026 = 2027)
+  → "12 June 2028" → "12 June 2028"
+  → "next year June" → "June 2027"
   → "this December" → "December 2026"
   → If resolved date is before July 2026: set validationNotes.isPastDate=true, exclude from patch
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
-  → Do NOT put datePreference content here
 - settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
 - destinationMode: "destination" (away from home) | "local" (same city) | "unknown"
 
@@ -85,11 +90,10 @@ EARLY SIGNALS CONFIRMATION: If earlySignals already in memory AND user confirms 
 
 Reject (do not include in validatedPatch, add to validationNotes.rejectedReasons):
 - Past dates or years (before July 2026)
-- Vague timing: "nice weather", "someday", "sometime", "not sure"
-- Gibberish""",
+- Gibberish / random noise""",
         "requiredFields": ["occasion.place", "occasion.datePreference"],
         "missingFieldsHint": ["wedding destination (city or region)", "wedding date or season"],
-        "advanceCondition": "place + concrete future month/season in memory",
+        "advanceCondition": "Location & timing confirmed (IL2/IL3/IL1_FLEXIBLE) or broad location asked once (IL1 turn 2)",
         "stateless": True,
     },
 
@@ -198,8 +202,9 @@ Extract into validatedPatch.logistics:
   Normalize: "mehendi"→"Mehndi", "sangeet"→"Sangeet", "reception"→"Reception",
     "haldi"→"Haldi", "engagement"→"Engagement", "nikah"→"Nikah",
     "cocktail"→"Cocktail Party", "wedding ceremony"→"Wedding Ceremony"
-- eventsConfirmed: true ONLY when user explicitly finalizes the list with phrases like:
-    "that's all", "only these", "just these", "done", "no more", "these are the events"
+- eventsConfirmed: 
+    * true ONLY when user explicitly confirms that the event list is COMPLETE and FINAL ("yes that's all", "confirm", "only these", "just these", "done", "no more", "looks good", "perfect").
+    * false whenever user wants to add, update, or change events ("yes I want to add more", "add Sangeet", "update events", "no", "nope", "not yet", "wait", "change").
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.events has values in memory AND user confirms →
 extract earlySignals.events into validatedPatch.logistics.events AND set eventsConfirmed appropriately.
@@ -211,9 +216,9 @@ Also extract into earlySignals:
 Reject (rejectedReasons):
 - Colors, aesthetics, decor as events
 - Personality or vibe data as events""",
-        "requiredFields": ["logistics.events", "logistics.eventsConfirmed"],
-        "missingFieldsHint": ["wedding functions/events", "confirmation that list is final (say 'that's all')"],
-        "advanceCondition": "1+ events listed AND user confirmed the list is complete",
+        "requiredFields": ["logistics.events"],
+        "missingFieldsHint": ["wedding functions/events"],
+        "advanceCondition": "1+ events listed",
         "stateless": False,
     },
 
@@ -236,19 +241,25 @@ Also extract into earlySignals:
     },
 
     StageId.S9_BUDGET.value: {
-        "goal": "Get a comfortable total budget range in INR lakhs.",
+        "goal": "Get a comfortable total budget range in local country currency or requested currency.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - budget: {
-    "range": "40-60 lakhs",
-    "currency": "INR"
+    "range": "27 Million" or "$2.5 Million" or "5 Lakhs" or "AED 500,000",
+    "currency": "PKR" / "INR" / "USD" / "AED" / "EUR" / "GBP" etc.
   }
-  Normalize amounts to lakhs:
-  - "1 crore" or "1 CR" → "100 lakhs"
-  - "50 lakhs" → "50 lakhs"
-  - "40-60" → "40-60 lakhs"
-  - "around 50" → "~50 lakhs"
-  - "$100k" → try to estimate INR equivalent or ask
+  Currency & Unit Normalization Rules:
+  - Default currency is inferred from the wedding country (Pakistan -> PKR, India -> INR, UAE -> AED, USA -> USD, UK -> GBP, Italy/Europe -> EUR, etc.).
+  - User EXPLICIT requested currency (e.g. "USD", "$", "AED", "EUR") ALWAYS overrides the country default.
+  - Unit Rules for ALL Currencies:
+    - Amounts >= 10 Lakhs (or >= 1 Million): ALWAYS format in MILLIONS (M) or BILLIONS (B)! Do NOT leave as Crores or 100+ Lakhs!
+      - 2.7 Crores (270 Lakhs) -> "27 Million"
+      - 1 Crore (100 Lakhs) -> "10 Million"
+      - 50 Lakhs -> "5 Million"
+      - 25 Lakhs -> "2.5 Million"
+      - 100 Crores -> "1 Billion"
+      - $1.5M / €2.5M -> "$1.5 Million" / "€2.5 Million"
+    - Amounts < 10 Lakhs (or < 1 Million): Format as Lakhs (for South Asian currencies e.g. "5 Lakhs") or Thousands/K (for global currencies e.g. "$500K" or "AED 500,000").
   - "not sure" or vague → do not extract, stay and clarify
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.budget has value in memory AND user confirms →
@@ -257,7 +268,7 @@ extract earlySignals.budget into validatedPatch.logistics.budget.
 Also extract into earlySignals:
 - vendors: { "photography": "candid" } — if mentioned""",
         "requiredFields": ["logistics.budget.range"],
-        "missingFieldsHint": ["budget range in lakhs (e.g. 40-60 lakhs)"],
+        "missingFieldsHint": ["budget range"],
         "advanceCondition": "budget.range filled",
         "stateless": False,
     },
@@ -266,17 +277,20 @@ Also extract into earlySignals:
         "goal": "Capture vendor category priorities per event day.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
-- vendorPreferences: { "category": "preference" }
-  Categories: photography, catering, decor, entertainment, planner, makeup, invitation
+- vendorPreferences: { "EventName": ["Vendor Category 1", "Vendor Category 2"] }
+  Map each event name in memory.logistics.events to its list of selected vendor categories.
+  Only include events listed in memory.logistics.events.
   Examples:
-    { "photography": "candid", "entertainment": "Sufi + Bollywood DJ" }
-    { "catering": "veg + dessert bar", "decor": "floral", "photography": "candid" }
-  Only include categories the user clearly mentions.
+    {
+      "Mehndi": ["Mehendi artist", "Catering", "Décor"],
+      "Sangeet": ["Stage and sound", "Sangeet performers", "DJ and entertainment"],
+      "Haldi": ["Haldi setup", "Catering", "Décor"]
+    }
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.vendors has values in memory AND user confirms →
 extract earlySignals.vendors into validatedPatch.logistics.vendorPreferences.""",
         "requiredFields": ["logistics.vendorPreferences"],
-        "missingFieldsHint": ["vendor category preferences (photography, decor, entertainment, etc.)"],
+        "missingFieldsHint": ["vendor category preferences per wedding event"],
         "advanceCondition": "vendorPreferences has at least one entry",
         "stateless": False,
     },
@@ -410,9 +424,7 @@ class StagePolicy:
         if stage_id == StageId.S7_EVENTS:
             logistics = memory.get("logistics", {}) or {}
             events = logistics.get("events") or []
-            if len(events) < 1:
-                return False
-            return bool(logistics.get("eventsConfirmed"))
+            return len(events) >= 1
 
         if stage_id == StageId.S8_GUESTS:
             events = memory.get("logistics", {}).get("events") or []

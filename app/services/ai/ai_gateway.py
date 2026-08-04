@@ -239,6 +239,18 @@ async def _call_groq(messages: list[dict], telemetry: dict) -> dict:
     )
 
 
+async def _call_openai(messages: list[dict], telemetry: dict) -> dict:
+    return await _call_openai_compatible(
+        label="OpenAI",
+        error_prefix="OPENAI",
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.OPENAI_MODEL,
+        messages=messages,
+        telemetry=telemetry,
+    )
+
+
 async def call_llm(
     messages: list[dict],
     stage: str,
@@ -261,6 +273,8 @@ async def call_llm(
                 parsed = await _call_grok(messages, telemetry)
             elif provider == "groq":
                 parsed = await _call_groq(messages, telemetry)
+            elif provider == "openai":
+                parsed = await _call_openai(messages, telemetry)
             else:
                 parsed = await _call_ollama(messages, telemetry)
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
@@ -277,7 +291,7 @@ async def call_llm(
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
-            prefix = {"grok": "GROK", "groq": "GROQ"}.get(provider, "OLLAMA")
+            prefix = {"grok": "GROK", "groq": "GROQ", "openai": "OPENAI"}.get(provider, "OLLAMA")
             last_error = AIGatewayError(
                 code=f"{prefix}_TIMEOUT" if isinstance(e, httpx.TimeoutException) else f"{prefix}_CONNECT_ERROR",
                 message=str(e),
@@ -288,7 +302,7 @@ async def call_llm(
         except (json.JSONDecodeError, ValueError) as e:
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
             print(f"[AI_GATEWAY] JSON parse failed on attempt {attempt + 1} ({provider}/{model}): {e}")
-            prefix = {"grok": "GROK", "groq": "GROQ"}.get(provider, "OLLAMA")
+            prefix = {"grok": "GROK", "groq": "GROQ", "openai": "OPENAI"}.get(provider, "OLLAMA")
             last_error = AIGatewayError(
                 code=f"{prefix}_JSON_PARSE_ERROR",
                 message=f"Failed to parse JSON from LLM response: {e}",
@@ -374,11 +388,22 @@ async def call_vision_llm(
 
     messages = [{"role": "user", "content": content_parts}]
 
-    if provider in ("grok", "groq"):
-        api_key = settings.GROQ_API_KEY if provider == "groq" else settings.GROK_API_KEY
-        base_url = settings.GROQ_BASE_URL if provider == "groq" else settings.GROK_BASE_URL
-        error_prefix = "GROQ_VISION" if provider == "groq" else "GROK_VISION"
-        label = "Groq Vision" if provider == "groq" else "Grok Vision"
+    if provider in ("grok", "groq", "openai"):
+        if provider == "groq":
+            api_key = settings.GROQ_API_KEY
+            base_url = settings.GROQ_BASE_URL
+            error_prefix = "GROQ_VISION"
+            label = "Groq Vision"
+        elif provider == "grok":
+            api_key = settings.GROK_API_KEY
+            base_url = settings.GROK_BASE_URL
+            error_prefix = "GROK_VISION"
+            label = "Grok Vision"
+        else:  # openai
+            api_key = settings.OPENAI_API_KEY
+            base_url = settings.OPENAI_BASE_URL
+            error_prefix = "OPENAI_VISION"
+            label = "OpenAI Vision"
         t0 = time.monotonic()
         try:
             if not api_key.strip():

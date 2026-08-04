@@ -13,25 +13,49 @@ from app.domain.chip_pools import CHIP_POOLS, get_chip_pool
 from app.domain.enums import StageId
 
 CHIP_STAGES = {
+    StageId.S2_BASICS.value,
     StageId.S3_PERSONALITY.value,
     StageId.S4_VIBE.value,
     StageId.S7_EVENTS.value,
-    StageId.S8_GUESTS.value,
-    StageId.S10_VENDORS.value,
 }
 
 # Vendor category chips grouped by event (aligned with product screens)
 EVENT_VENDOR_CHIPS: dict[str, list[str]] = {
-    "mehndi": ["Mehendi artist", "Catering", "Décor"],
-    "haldi": ["Haldi setup", "Catering", "Décor"],
-    "sangeet": ["Stage and sound", "Sangeet performers", "Catering", "DJ"],
+    "mehndi": ["Mehendi artist", "Catering", "Décor", "Photography"],
+    "mehendi": ["Mehendi artist", "Catering", "Décor", "Photography"],
+    "haldi": ["Haldi setup", "Catering", "Décor", "Florals"],
+    "ubtan": ["Haldi setup", "Catering", "Décor", "Florals"],
+    "sangeet": ["Stage and sound", "Sangeet performers", "Catering", "DJ and entertainment"],
+    "nikkah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
+    "nikah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
+    "baraat": ["Baraat coordinator", "Band & Dhol", "Photography", "Catering"],
+    "walima": ["Venue & Décor", "Catering", "Photography", "Stage Setup"],
     "wedding ceremony": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
-    "reception": ["Photography", "Catering", "DJ and entertainment"],
-    "engagement": ["Photography", "Décor", "Catering"],
-    "cocktail night": ["Bar and beverages", "DJ", "Décor", "Catering"],
+    "wedding": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
+    "reception": ["Photography", "Catering", "DJ and entertainment", "Décor"],
+    "engagement": ["Photography", "Décor", "Catering", "Ring Stage Setup"],
     "ring ceremony": ["Décor", "Photography", "Catering"],
+    "cocktail night": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
+    "cocktail": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
     "after party": ["DJ and entertainment", "Bar and beverages", "Lighting"],
 }
+
+
+def get_vendors_for_event(event_name: str) -> list[str]:
+    """Return 3 to 5 curated vendor suggestions for a specific event."""
+    key = event_name.strip().lower()
+    for pattern, vendors in EVENT_VENDOR_CHIPS.items():
+        if pattern in key:
+            return vendors[:5]
+    return ["Photography", "Catering", "Décor", "Florals"]
+
+
+def build_vendor_suggestions_by_event(events: list[str]) -> dict[str, list[str]]:
+    """Build a mapping of event name -> 3 to 5 curated vendor suggestions."""
+    res = {}
+    for event in events:
+        res[event] = get_vendors_for_event(event)
+    return res
 
 
 def _normalize_label(label: str) -> str:
@@ -55,8 +79,7 @@ def build_vendor_chip_pool(events: list[str]) -> list[str]:
     pool: list[str] = []
     seen: set[str] = set()
     for event in events:
-        key = event.strip().lower()
-        for chip in EVENT_VENDOR_CHIPS.get(key, []):
+        for chip in get_vendors_for_event(event):
             if chip not in seen:
                 seen.add(chip)
                 pool.append(chip)
@@ -120,18 +143,104 @@ def _contextual_chip_order(stage: str, memory: dict, pool: list[str]) -> list[st
     return [chip for _, chip in scored]
 
 
-def build_guest_count_suggestions(memory: dict) -> list[dict]:
+def _already_selected_chips_for_stage(display_stage: str, memory: dict) -> set[str]:
+    selected_set = set()
+    personality = memory.get("personality") or {}
+    vibe = memory.get("vibe") or {}
+    logistics = memory.get("logistics") or {}
+    early = memory.get("earlySignals") or {}
+    committed = memory.get("committedSelections") or {}
+
+    if display_stage == StageId.S3_PERSONALITY.value:
+        for t in (personality.get("tags") or []) + (early.get("personality") or []) + (committed.get("personality") or []):
+            if isinstance(t, str) and t.strip():
+                selected_set.add(t.strip().lower())
+    elif display_stage == StageId.S4_VIBE.value:
+        if primary := vibe.get("primaryVibe"):
+            selected_set.add(primary.strip().lower())
+        for s in (vibe.get("secondaryVibes") or []) + (early.get("vibe") or []) + (committed.get("vibe") or []):
+            if isinstance(s, str) and s.strip():
+                selected_set.add(s.strip().lower())
+    elif display_stage == StageId.S7_EVENTS.value:
+        for e in (logistics.get("events") or []) + (early.get("events") or []) + (committed.get("events") or []):
+            if isinstance(e, str) and e.strip():
+                selected_set.add(e.strip().lower())
+    elif display_stage == StageId.S10_VENDORS.value:
+        vendors = logistics.get("vendorPreferences") or {}
+        for cat in vendors.keys():
+            if isinstance(cat, str) and cat.strip():
+                selected_set.add(cat.strip().lower())
+
+    return selected_set
+
+
+def build_guest_count_suggestions(memory: dict) -> list[str]:
     """Suggest guest-count prompts only for events missing counts."""
     events = memory.get("logistics", {}).get("events") or []
     counts = memory.get("logistics", {}).get("guestCounts") or {}
-    suggestions: list[dict] = []
+    suggestions: list[str] = []
     for event in events:
         if not isinstance(counts.get(event), int) or counts.get(event, 0) <= 0:
-            suggestions.append({
-                "label": f"{event} — guest count?",
-                "category": "guests",
-            })
+            suggestions.append(f"{event} — guest count?")
     return suggestions[:6]
+
+
+COUNTRY_DESTINATIONS: dict[str, list[str]] = {
+    "pakistan": ["Lahore", "Karachi", "Islamabad", "Bhurban", "Hunza", "Naran"],
+    "india": ["Udaipur", "Goa", "Jaipur", "Jodhpur", "Kerala", "Mussoorie"],
+    "thailand": ["Phuket", "Bangkok", "Koh Samui", "Chiang Mai", "Krabi", "Pattaya"],
+    "uae": ["Dubai", "Abu Dhabi", "Ras Al Khaimah"],
+    "dubai": ["Dubai", "Abu Dhabi", "Ras Al Khaimah"],
+    "italy": ["Florence", "Lake Como", "Amalfi Coast", "Venice", "Tuscany", "Rome"],
+    "france": ["Paris", "French Riviera", "Nice", "Provence"],
+    "uk": ["London", "Cotswolds", "Edinburgh"],
+    "united kingdom": ["London", "Cotswolds", "Edinburgh"],
+    "usa": ["Hawaii", "Aspen", "Napa Valley", "Miami", "New York"],
+    "indonesia": ["Bali", "Ubud", "Seminyak"],
+    "maldives": ["Male", "Maafushi", "Baa Atoll"],
+    "spain": ["Barcelona", "Ibiza", "Mallorca", "Seville"],
+    "turkey": ["Istanbul", "Cappadocia", "Antalya", "Bodrum"],
+}
+
+
+def build_s2_location_suggestions(memory: dict) -> list[str]:
+    """
+    Generate context-aware city/region chip suggestions for S2 when location/timing is broad (IL1).
+    Matches user's country, setting (beach, palace, mountains, nature, urban, etc.) and destination mode.
+    Returns ONLY destination / city / place suggestions matching input values.
+    Returns empty list on gibberish / L0 turns.
+    """
+    occ = memory.get("occasion") or {}
+    spec_level = (occ.get("specificityLevel") or "").strip().upper()
+    if spec_level == "L0":
+        return []
+
+    country = (occ.get("country") or "").strip().lower()
+    place_text = (
+        f"{occ.get('place') or ''} {occ.get('locationPreference') or ''} {occ.get('settingPreference') or ''} {occ.get('destinationMode') or ''} {country}"
+    ).lower().strip()
+
+    if not place_text:
+        return []
+
+    # 1. Country-based destination suggestions
+    for c_key, c_destinations in COUNTRY_DESTINATIONS.items():
+        if c_key in place_text:
+            return c_destinations[:6]
+
+    # 2. Setting/Location-based destination suggestions
+    if any(k in place_text for k in ("beach", "coastal", "ocean", "sea", "island", "tropical")):
+        return ["Goa", "Phuket", "Bali", "Maldives", "Koh Samui", "Boracay"]
+    elif any(k in place_text for k in ("palace", "royal", "fort", "heritage", "castle")):
+        return ["Udaipur", "Jaipur", "Jodhpur", "Florence", "Agra", "Muscat"]
+    elif any(k in place_text for k in ("mountain", "hill", "nature", "outdoor", "valley", "alpine")):
+        return ["Shimla", "Manali", "Lake Como", "Swiss Alps", "Mussoorie", "Aspen"]
+    elif any(k in place_text for k in ("urban", "modern", "city", "skyline")):
+        return ["Dubai", "Singapore", "Delhi", "Mumbai", "London", "New York"]
+    elif any(k in place_text for k in ("destination", "resort")):
+        return ["Goa", "Udaipur", "Phuket", "Bali", "Jaipur", "Maldives"]
+
+    return ["Goa", "Udaipur", "Jaipur", "Phuket", "Bali", "Thailand"]
 
 
 def build_ui_suggestions(
@@ -141,61 +250,65 @@ def build_ui_suggestions(
     *,
     for_stage: str | None = None,
     prefer_custom: bool = False,
-) -> list[dict]:
+) -> list[str]:
     """
-    Return normalized suggestion objects for the frontend chip UI.
+    Return clean string suggestions (labels) for the frontend chip UI.
+
+    AI-first: trusts and returns AI-generated suggestions directly — BUT only
+    when the AI was generating chips FOR the correct stage.
+
+    When advancing (for_stage != stage), the AI generated chips for the old
+    stage, so we discard them and build chips for the target (for_stage) instead.
+
     `for_stage` lets us attach chips for the stage we are advancing into.
-    `prefer_custom` (more_suggestions): keep AI-invented labels; do not refill only from pool.
+    Always excludes chip labels already selected in memory.
     """
     display_stage = for_stage or stage
+    already_selected = _already_selected_chips_for_stage(display_stage, memory)
 
-    if display_stage == StageId.S8_GUESTS.value:
-        guest_hints = build_guest_count_suggestions(memory)
-        if guest_hints:
-            return guest_hints
+    # When advancing: AI chips were generated for `stage` (old stage), not
+    # `for_stage` (new stage). Discard them — they are wrong-stage chips.
+    is_advancing = for_stage and for_stage != stage
 
+    if not is_advancing:
+        # 1. AI suggestions — primary source, trust them (same stage as AI was on)
+        ai_labels = [
+            lbl for lbl in _labels_from_ai(ai_suggestions)
+            if lbl.lower() not in already_selected
+            and 2 <= len(lbl) <= 50
+        ]
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for lbl in ai_labels:
+            if lbl.lower() not in seen:
+                seen.add(lbl.lower())
+                deduped.append(lbl)
+        if deduped:
+            return deduped[:6]
+    else:
+        seen: set[str] = set()
+
+    # 2. Fallback for S2 (when AI returns [] or we are advancing away from S2)
+    if display_stage == StageId.S2_BASICS.value:
+        return build_s2_location_suggestions(memory)
+
+    # 3. Fallback for other chip stages (advancing, synthesis paths, or empty AI output)
     if display_stage not in CHIP_STAGES:
-        return [{"label": label, "category": None} for label in _labels_from_ai(ai_suggestions)]
+        return []
 
     pool = _pool_for_stage(display_stage, memory)
     if not pool:
-        return [{"label": label, "category": None} for label in _labels_from_ai(ai_suggestions)]
+        return []
 
-    pool_set = {c.lower(): c for c in pool}
-    selected: list[str] = []
-    allow_custom = prefer_custom or display_stage in (
-        StageId.S3_PERSONALITY.value,
-        StageId.S4_VIBE.value,
-    )
-
-    for label in _labels_from_ai(ai_suggestions):
-        canonical = pool_set.get(label.lower())
-        if canonical:
-            if canonical not in selected:
-                selected.append(canonical)
-        elif allow_custom and 2 <= len(label) <= 40 and label not in selected:
-            # Chip pool is reference — keep agent-invented short labels
-            if label.lower() not in {s.lower() for s in selected}:
-                selected.append(label)
-        if prefer_custom and len(selected) >= 6:
+    fallback = []
+    for chip in _contextual_chip_order(display_stage, memory, pool):
+        if chip.lower() not in already_selected and chip.lower() not in seen:
+            fallback.append(chip)
+            seen.add(chip.lower())
+        if len(fallback) >= 6:
             break
+    return fallback
 
-    if not prefer_custom or len(selected) < 3:
-        for chip in _contextual_chip_order(display_stage, memory, pool):
-            if chip.lower() not in {s.lower() for s in selected}:
-                selected.append(chip)
-            if len(selected) >= 6:
-                break
-
-    category = {
-        StageId.S3_PERSONALITY.value: "personality",
-        StageId.S4_VIBE.value: "vibe",
-        StageId.S7_EVENTS.value: "events",
-        StageId.S8_GUESTS.value: "guests",
-        StageId.S10_VENDORS.value: "vendors",
-    }.get(display_stage, "chip")
-
-    return [{"label": chip, "category": category} for chip in selected[:6]]
 
 
 def chips_mentioned_in_message(message: str, pool: list[str]) -> list[str]:

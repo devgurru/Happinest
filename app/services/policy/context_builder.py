@@ -350,10 +350,17 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
         if stage == StageId.S2_BASICS.value:
             from app.utils.validators import get_occasion_state
             state = get_occasion_state(memory)
-            if not state["has_place"]:
-                missing.append("wedding destination (city or region)")
-            if not state["has_time"]:
-                missing.append("wedding date or season")
+            spec_level = state.get("specificity_level")
+
+            if spec_level == "L0":
+                missing.append("location or timing in a simple way (even broad setting and season is enough)")
+            elif spec_level == "IL1":
+                missing.append("whether you have a specific region/month in mind or want to keep it flexible for now")
+            else:
+                if not state["has_place"]:
+                    missing.append("wedding destination (city or region)")
+                if not state["has_time"]:
+                    missing.append("wedding date or season")
             return missing
         if stage == StageId.S3_PERSONALITY.value:
             from app.utils.validators import filter_tags
@@ -370,8 +377,6 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
             events = (memory.get("logistics") or {}).get("events") or []
             if not events:
                 missing.append("wedding functions/events")
-            elif not (memory.get("logistics") or {}).get("eventsConfirmed"):
-                missing.append("confirmation that event list is complete (say 'that's all')")
             return missing
         if stage == StageId.S8_GUESTS.value:
             events = (memory.get("logistics") or {}).get("events") or []
@@ -383,7 +388,7 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
         if stage == StageId.S9_BUDGET.value:
             budget = (memory.get("logistics") or {}).get("budget") or {}
             if not budget.get("range"):
-                missing.append("budget range in lakhs")
+                missing.append("budget range")
             return missing
         if stage == StageId.S10_VENDORS.value:
             prefs = (memory.get("logistics") or {}).get("vendorPreferences") or {}

@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_VISION_MODEL: str = "gpt-4o"
 
 
     # App
@@ -83,7 +85,7 @@ class Settings(BaseSettings):
         provider = (self.LLM_PROVIDER or "ollama").strip().lower()
         if provider in ("xai", "x-ai"):
             return "grok"
-        if provider not in ("ollama", "grok", "groq"):
+        if provider not in ("ollama", "grok", "groq", "openai"):
             return "ollama"
         return provider
 
@@ -105,13 +107,17 @@ class Settings(BaseSettings):
             return self.GROK_MODEL
         if self.llm_provider == "groq":
             return self.GROQ_MODEL
+        if self.llm_provider == "openai":
+            return self.OPENAI_MODEL
         return self.OLLAMA_MODEL
 
     @property
     def active_vision_model(self) -> str:
-        """Model used for image analysis (multimodal). Groq only for now."""
+        """Model used for image analysis (multimodal). Groq/OpenAI/Ollama."""
         if self.llm_provider == "groq":
             return self.GROQ_VISION_MODEL
+        if self.llm_provider == "openai":
+            return self.OPENAI_VISION_MODEL
         # Ollama vision model if local — assumes llava or gemma3 vision variant
         return self.OLLAMA_MODEL
 
