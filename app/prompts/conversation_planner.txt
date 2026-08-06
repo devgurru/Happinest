@@ -65,7 +65,13 @@ Return chips ONLY on these stages: s2_basics, s3_personality, s4_vibe, s7_events
 All other stages: return suggestions as [].
 
 Rules for chips:
-- s2_basics: 4–6 real, well-known places (cities, regions, islands) that genuinely match what they said. If they said desert → give desert destinations. If beach → coastal places. If mountain → mountain destinations. Never mix categories.
+- s2_basics: 4–6 real, well-known wedding destinations (cities, regions, islands) that genuinely match what the couple specified (e.g. beach -> coastal; desert -> desert; mountain -> mountain).
+  * BUDGET & SCALE REALISM: You MUST analyze the couple's budget, currency, and guest count (found in "What just happened this turn" early signals, or in memory) before suggesting locations.
+  * If the budget is low/moderate (e.g. under $40,000 USD / under 30-40 Lakhs INR / under 10 Million PKR / $25-30k):
+    - Do NOT suggest ultra-luxury or high-cost destinations like Hawaii, Amalfi Coast, Maldives, French Riviera, Lake Como, Santorini, or St. Barts. They are financially unrealistic.
+    - Instead, suggest affordable/moderate alternatives matching their setting: e.g. for beach: Goa, Phuket, Bali, Tulum, Krabi, Da Nang; for mountains: Shimla, Manali, Pokhara, Bhurban, Naran, Gatlinburg, etc.
+  * If the budget is high (e.g. $100k+ USD / 1 Crore+ INR): you can suggest luxury and premium options.
+  * Never mix categories.
 - s3_personality: 3–5 tags that describe WHO THIS COUPLE IS as people — their passions, lifestyle, relationship story, cultural roots. Never vibe or mood words here.
 - s4_vibe: 3–5 tags that describe how their WEDDING SHOULD FEEL — atmosphere, energy, formality, scale. Never personality/identity words here.
 - s7_events: 3–5 real wedding function names relevant to their background and location.

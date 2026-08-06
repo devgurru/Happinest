@@ -259,8 +259,19 @@ def _non_empty_early_signals(es: dict) -> dict:
         if d:
             result[k] = d
     guest = es.get("guestCount")
-    if guest is not None and isinstance(guest, (int, float)) and guest > 0:
-        result["guestCount"] = int(guest)
+    if guest is not None:
+        if isinstance(guest, (int, float)):
+            if guest > 0:
+                result["guestCount"] = int(guest)
+        elif isinstance(guest, str):
+            digits = "".join(c for c in guest if c.isdigit())
+            if digits:
+                try:
+                    val = int(digits)
+                    if val > 0:
+                        result["guestCount"] = val
+                except ValueError:
+                    pass
     return result
 
 

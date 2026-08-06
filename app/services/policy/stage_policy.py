@@ -83,7 +83,7 @@ Also extract into earlySignals (NOT validatedPatch):
 - personality: ["Foodies", "College sweethearts", "Travel lovers", "Big family"]
 - vibe: ["Big & festive", "Intimate", "Traditional", "Royal & grand"]
 - events: ["Mehndi", "Barat", "Walima", "Reception", "Sangeet", "Haldi", "Engagement"]
-- budget: { "range": "20-30 lakhs" }
+- budget: { "range": "$25-30k", "currency": "USD" }
 - guestCount: number (e.g. 2500)
 
 EARLY SIGNALS CONFIRMATION: If earlySignals already in memory AND user confirms → extract into validatedPatch.
@@ -117,7 +117,7 @@ extract earlySignals.personality values into validatedPatch.personality.tags.
 Also extract into earlySignals:
 - vibe: labels like ["Big & festive", "Intimate", "Traditional & rooted"]
 - events: ["Mehndi", "Sangeet", "Haldi", "Reception"]
-- budget: { "range": "..." }
+- budget: { "range": "...", "currency": "..." }
 
 Reject (add to validationNotes.rejectedReasons):
 - Cities, months, or years as personality tags
@@ -149,7 +149,7 @@ User confirmation signals: "yes" / "keep that" / "go with it" / "use earlier" / 
 
 Also extract into earlySignals:
 - events: ["Mehndi", "Haldi", "Sangeet", "Reception", "Engagement"]
-- budget: { "range": "..." }
+- budget: { "range": "...", "currency": "..." }
 - vendors: { "photography": "candid" }
 
 Reject (add to rejectedReasons, do not include in validatedPatch):
@@ -210,7 +210,7 @@ EARLY SIGNALS CONFIRMATION: If earlySignals.events has values in memory AND user
 extract earlySignals.events into validatedPatch.logistics.events AND set eventsConfirmed appropriately.
 
 Also extract into earlySignals:
-- budget: { "range": "..." }
+- budget: { "range": "...", "currency": "..." }
 - vendors: { "photography": "candid" }
 
 Reject (rejectedReasons):
@@ -233,7 +233,7 @@ Extract into validatedPatch.logistics:
   Normalize: "200 people" → 200, "around 300" → 300, "500+" → 500
 
 Also extract into earlySignals:
-- budget: { "range": "..." } — if user mentions budget while answering""",
+- budget: { "range": "...", "currency": "..." } — if user mentions budget while answering""",
         "requiredFields": ["logistics.guestCounts"],
         "missingFieldsHint": ["guest count for each wedding event"],
         "advanceCondition": "guestCounts filled for all events in logistics.events",
