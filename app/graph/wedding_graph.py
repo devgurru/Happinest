@@ -104,7 +104,7 @@ async def process_s1_names(
     )
 
     welcome = (
-        f"Lovely to meet you both, {groom_name} and {bride_name}! 💕 "
+        f"Lovely to meet you both, {groom_name} and {bride_name}!"
         f"What wedding destination are you dreaming of, and what time of year are you planning for?"
     )
     await SessionService.append_message(
