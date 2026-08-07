@@ -7,7 +7,6 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.domain.enums import StaleSectionId
 from app.domain.memory_schema import update_committed_selections

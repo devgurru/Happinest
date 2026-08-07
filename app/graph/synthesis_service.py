@@ -17,7 +17,7 @@ from app.domain.enums import (
     ArtifactStatus, ArtifactType, EventType, MessageRole, MessageType,
     ResponseSource, StageDecisionType, StageId, SynthesisType,
 )
-from app.domain.memory_schema import build_selected_chips, resolve_primary_vibe
+from app.domain.memory_schema import resolve_primary_vibe
 from app.graph.direction_service import execute_direction_from_embeddings
 from app.graph.response_builder import make_error_response, response_dict
 from app.models.generated_artifact import GeneratedArtifact
@@ -124,7 +124,7 @@ def summarize_correction_for_reply(
             if b_primary and b_primary != a_primary:
                 parts.append(f"vibe updated to {a_primary or 'unset'}")
             elif b_sec and b_sec != a_sec:
-                parts.append(f"vibe notes updated")
+                parts.append("vibe notes updated")
         elif section == "occasion":
             b = memory_before.get("occasion") or {}
             a = memory_after.get("occasion") or {}

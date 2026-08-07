@@ -6,9 +6,7 @@ build standardized response dicts — no DB or session dependencies.
 """
 from __future__ import annotations
 
-import re
 import uuid
-from typing import Any
 
 from app.domain.enums import ResponseSource, StageId
 from app.domain.memory_schema import build_planner_notes_view, build_selected_chips
@@ -115,7 +113,7 @@ def response_dict(
             if isinstance(lbl, str) and lbl.strip() and lbl.strip() not in clean_suggs:
                 clean_suggs.append(lbl.strip())
 
-    stage_val = stage_decision.get("stage") if isinstance(stage_decision, dict) else stage
+    stage_val = stage_decision.get("stage", "s2_basics") if isinstance(stage_decision, dict) else "s2_basics"
     effective_artifact = extract_brief_artifact_if_present(str(stage_val), memory, artifact_content)
 
     return {

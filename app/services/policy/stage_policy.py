@@ -1,32 +1,16 @@
 """
-Stage Policy Engine — SINGLE SOURCE OF TRUTH for all stage behavior.
+Stage Policy — Backend gate for stage progression.
 
-This module owns:
-1. STAGE_CONFIG — per-stage goals, extraction rules, advance conditions
-2. Stage completion logic (backend enforcement via is_stage_complete)
-3. Transition validation (allowed stage movements)
-4. Final decision resolution (backend overrides AI proposals)
-
-HOW THE NEW ARCHITECTURE WORKS:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  AI Call 1 (data_extractor.py) reads STAGE_CONFIG["extractionRules"] to know
-  what to extract and how to validate it for each stage.
-
-  context_builder.py calls is_stage_complete() and reads missingFieldsHint to
-  determine stay/advance and what fields to ask for.
-
-  AI Call 2 (response planner) receives a TurnContext with pre-computed
-  decisions — it only writes the human reply and suggestion chips.
-
-HOW TO UPDATE STAGE BEHAVIOR:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-To modify a stage:
-  1. UPDATE STAGE_CONFIG (extractionRules, advanceCondition, missingFieldsHint)
-  2. UPDATE is_stage_complete() for backend enforcement
-  3. For allowed transitions, update: app/domain/enums.py (ALLOWED_TRANSITIONS)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Keeps:
+1. STAGE_CONFIG — extraction rules for AI Call 1
+2. StagePolicy.is_stage_complete() — deterministic backend gate
+3. StagePolicy.validate_transition() — structural validation
+4. StagePolicy.resolve_final_decision_with_memory() — override bad AI decisions
+5. check_budget_feasibility() / format_cost() — math the agent can't do
 """
 from __future__ import annotations
+
+import re
 
 from app.domain.enums import (
     ALLOWED_TRANSITIONS,
@@ -39,21 +23,12 @@ from app.domain.enums import (
 
 
 # ============================================================================
-# STAGE CONFIGURATION — single source of truth per stage
-#
-# Each stage has:
-#   goal             — What the stage is trying to accomplish (shown in prompts)
-#   extractionRules  — Injected into AI Call 1 (data_extraction.txt)
-#   requiredFields   — Field paths needed for completion (for context_builder)
-#   missingFieldsHint— Human-readable missing field names (for prompts)
-#   advanceCondition — When stage can advance (for documentation + prompt)
-#   stateless        — Whether this stage depends on prior memory
+# STAGE_CONFIG — extraction rules for AI Call 1 (data_extraction.txt)
 # ============================================================================
 
 STAGE_CONFIG: dict[str, dict] = {
 
     StageId.S2_BASICS.value: {
-        "goal": "Capture where and when the wedding will be. Advance when location/timing is confirmed or kept flexible.",
         "extractionRules": """\
 IMPORTANT: Even if metaIntent is "correction" (e.g. correcting names), STILL extract ALL S2 fields below.
 
@@ -91,14 +66,9 @@ EARLY SIGNALS CONFIRMATION: If earlySignals already in memory AND user confirms 
 Reject (do not include in validatedPatch, add to validationNotes.rejectedReasons):
 - Past dates or years (before July 2026)
 - Gibberish / random noise""",
-        "requiredFields": ["occasion.place", "occasion.datePreference"],
-        "missingFieldsHint": ["wedding destination (city or region)", "wedding date or season"],
-        "advanceCondition": "Location & timing confirmed (IL2/IL3/IL1_FLEXIBLE) or broad location asked once (IL1 turn 2)",
-        "stateless": True,
     },
 
     StageId.S3_PERSONALITY.value: {
-        "goal": "Capture who the couple is — personality, lifestyle, relationship, cultural background.",
         "extractionRules": """\
 Extract into validatedPatch.personality (only fields that are mentioned):
 - tags: short meaningful labels (1-5 words each)
@@ -124,14 +94,9 @@ Reject (add to validationNotes.rejectedReasons):
 - Occasion rehash (user just repeating their location/date) → set metaIntent to "clarification"
 - Random keystrokes → set metaIntent to "gibberish", validatedPatch must be {}
 - Single meaningless word fragments""",
-        "requiredFields": ["personality.tags"],
-        "missingFieldsHint": ["personality traits or labels describing the couple (2+ needed)"],
-        "advanceCondition": "2+ meaningful personality tags (never cities/dates/gibberish)",
-        "stateless": False,
     },
 
     StageId.S4_VIBE.value: {
-        "goal": "Confirm primary vibe/atmosphere of the wedding. Ask what feeling/energy they want.",
         "extractionRules": """\
 Extract into validatedPatch.vibe:
 - primaryVibe: one of these pool values → ["Big & festive", "Intimate & cozy", "Traditional & rooted",
@@ -145,7 +110,6 @@ Extract into validatedPatch.vibe:
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.vibe has values in memory AND user confirms →
 extract earlySignals.vibe[0] into validatedPatch.vibe.primaryVibe.
-User confirmation signals: "yes" / "keep that" / "go with it" / "use earlier" / "that's right" / "perfect"
 
 Also extract into earlySignals:
 - events: ["Mehndi", "Haldi", "Sangeet", "Reception", "Engagement"]
@@ -156,14 +120,9 @@ Reject (add to rejectedReasons, do not include in validatedPatch):
 - Cities or months as vibe (e.g. "Goa" is NOT a vibe)
 - Personality tags in vibe fields
 - Occasion rehash → clarification""",
-        "requiredFields": ["vibe.primaryVibe"],
-        "missingFieldsHint": ["wedding vibe or atmosphere (e.g. Big & festive, Intimate, Royal & grand)"],
-        "advanceCondition": "primaryVibe is a pool label or clear custom vibe; personality already filled",
-        "stateless": False,
     },
 
     StageId.S5_BRIEF.value: {
-        "goal": "Present/refine the couple brief. Synthesis owns brief text generation.",
         "extractionRules": """\
 This is a synthesis stage — the brief has been generated by AI.
 Only extract corrections if user explicitly corrects something:
@@ -172,14 +131,9 @@ Only extract corrections if user explicitly corrects something:
 - vibe corrections: primaryVibe
 Set correctedSection to the section being corrected.
 If user asks to see directions → set metaIntent to "normal" (direction request is handled separately).""",
-        "requiredFields": [],
-        "missingFieldsHint": [],
-        "advanceCondition": "Brief confirmed or direction synthesis requested",
-        "stateless": False,
     },
 
     StageId.S6_DIRECTIONS.value: {
-        "goal": "User picks one design direction option from the presented list.",
         "extractionRules": """\
 Extract into validatedPatch.direction:
 - selectedDirectionId: the slug/id of the direction option the user picks
@@ -188,14 +142,9 @@ Extract into validatedPatch.direction:
 Match against direction options in memory.direction.options.
 If user describes a direction without naming it → match to closest option.
 Do NOT extract place names as direction names.""",
-        "requiredFields": ["direction.selectedDirectionId"],
-        "missingFieldsHint": ["selected design direction (pick one from the options shown)"],
-        "advanceCondition": "A listed direction is clearly selected",
-        "stateless": False,
     },
 
     StageId.S7_EVENTS.value: {
-        "goal": "Confirm which wedding functions/events they want. Ask about events specifically.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - events: list of wedding function names
@@ -216,14 +165,9 @@ Also extract into earlySignals:
 Reject (rejectedReasons):
 - Colors, aesthetics, decor as events
 - Personality or vibe data as events""",
-        "requiredFields": ["logistics.events"],
-        "missingFieldsHint": ["wedding functions/events"],
-        "advanceCondition": "1+ events listed",
-        "stateless": False,
     },
 
     StageId.S8_GUESTS.value: {
-        "goal": "Capture guest count for EVERY selected event.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - guestCounts: { "EventName": number }
@@ -234,14 +178,9 @@ Extract into validatedPatch.logistics:
 
 Also extract into earlySignals:
 - budget: { "range": "...", "currency": "..." } — if user mentions budget while answering""",
-        "requiredFields": ["logistics.guestCounts"],
-        "missingFieldsHint": ["guest count for each wedding event"],
-        "advanceCondition": "guestCounts filled for all events in logistics.events",
-        "stateless": False,
     },
 
     StageId.S9_BUDGET.value: {
-        "goal": "Get a comfortable total budget range in local country currency or requested currency.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - budget: {
@@ -277,14 +216,9 @@ extract earlySignals.budget into validatedPatch.logistics.budget.
 
 Also extract into earlySignals:
 - vendors: { "photography": "candid" } — if mentioned""",
-        "requiredFields": ["logistics.budget.range"],
-        "missingFieldsHint": ["budget range"],
-        "advanceCondition": "budget.range filled",
-        "stateless": False,
     },
 
     StageId.S10_VENDORS.value: {
-        "goal": "Capture vendor category priorities per event day.",
         "extractionRules": """\
 Extract into validatedPatch.logistics:
 - vendorPreferences: { "EventName": ["Vendor Category 1", "Vendor Category 2"] }
@@ -299,38 +233,19 @@ Extract into validatedPatch.logistics:
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.vendors has values in memory AND user confirms →
 extract earlySignals.vendors into validatedPatch.logistics.vendorPreferences.""",
-        "requiredFields": ["logistics.vendorPreferences"],
-        "missingFieldsHint": ["vendor category preferences per wedding event"],
-        "advanceCondition": "vendorPreferences has at least one entry",
-        "stateless": False,
     },
 
     StageId.S11_SUMMARY.value: {
-        "goal": "Confirm final summary. Synthesis owns summary text.",
         "extractionRules": """\
 This is a synthesis stage — the summary has been generated by AI.
 Only extract corrections if user explicitly corrects something.
 Set correctedSection to the section being corrected.""",
-        "requiredFields": [],
-        "missingFieldsHint": [],
-        "advanceCondition": "Summary confirmed",
-        "stateless": False,
     },
 }
 
 
-_SECTION_TO_STAGE: dict[str, str] = {
-    "identity": StageId.S1_NAMES.value,
-    "occasion": StageId.S2_BASICS.value,
-    "personality": StageId.S3_PERSONALITY.value,
-    "vibe": StageId.S4_VIBE.value,
-    "direction": StageId.S6_DIRECTIONS.value,
-    "logistics": StageId.S7_EVENTS.value,
-}
-
-
 # ============================================================================
-# STAGE POLICY CLASS
+# BUDGET FEASIBILITY
 # ============================================================================
 
 def format_cost(amount_usd: float, currency: str) -> str:
@@ -355,7 +270,6 @@ def format_cost(amount_usd: float, currency: str) -> str:
     elif currency == "EUR":
         return f"€{amount_usd * 0.92:,.0f}"
     else:
-        # USD
         if amount_usd >= 1000:
             return f"${amount_usd / 1000:.0f}k"
         return f"${amount_usd:,.0f}"
@@ -366,69 +280,54 @@ def check_budget_feasibility(memory: dict) -> tuple[bool, str, float]:
     Evaluates wedding budget feasibility based on place, events, and guest counts.
     Returns (is_feasible, formatted_estimated_min_budget, estimated_cost_usd).
     """
-    import re
     occasion = memory.get("occasion") or {}
     logistics = memory.get("logistics") or {}
-    
+
     place = (occasion.get("place") or occasion.get("locationPreference") or "").strip()
     events = logistics.get("events") or []
     guest_counts = logistics.get("guestCounts") or {}
-    
-    # 1. Determine Tier Pricing
+
     place_l = place.lower()
-    # High-tier: Europe, USA, premium destinations
-    high_tier_keywords = ["amalfi", "como", "hawaii", "maldives", "paris", "london", 
-                          "new york", "switzerland", "swiss", "italy", "france", 
+    high_tier_keywords = ["amalfi", "como", "hawaii", "maldives", "paris", "london",
+                          "new york", "switzerland", "swiss", "italy", "france",
                           "usa", "uk", "united kingdom", "santorini", "greece"]
-    
-    # Mid-tier: resort destinations, premium South Asia
-    mid_tier_keywords = ["goa", "phuket", "bali", "tulum", "krabi", "da nang", 
+    mid_tier_keywords = ["goa", "phuket", "bali", "tulum", "krabi", "da nang",
                          "udaipur", "jaipur", "jodhpur", "dubai", "uae"]
-    
-    cost_per_guest = 50.0  # Default standard/local
+
+    cost_per_guest = 50.0
     cost_per_event = 2000.0
-    
-    is_high = any(k in place_l for k in high_tier_keywords)
-    is_mid = any(k in place_l for k in mid_tier_keywords)
-    
-    if is_high:
+
+    if any(k in place_l for k in high_tier_keywords):
         cost_per_guest = 400.0
         cost_per_event = 8000.0
-    elif is_mid:
+    elif any(k in place_l for k in mid_tier_keywords):
         cost_per_guest = 150.0
         cost_per_event = 4000.0
-        
-    # 2. Calculate Estimated Minimum Budget in USD
+
     total_guests = sum(guest_counts.values()) if isinstance(guest_counts, dict) else 0
     num_events = len(events)
-    
-    estimated_cost_usd = (total_guests * cost_per_guest) + (num_events * cost_per_event)
-    estimated_cost_usd = max(5000.0, estimated_cost_usd)
-    
-    # 3. Get User Budget
+    estimated_cost_usd = max(5000.0, (total_guests * cost_per_guest) + (num_events * cost_per_event))
+
     budget_obj = logistics.get("budget") or memory.get("earlySignals", {}).get("budget") or {}
     budget_str = (budget_obj.get("range") or "").strip()
     currency = (budget_obj.get("currency") or "").strip().upper()
-    
+
     if not budget_str:
-        return True, "", 0.0  # No budget to check yet
-        
+        return True, "", 0.0
+
     if not currency:
-        # Infer currency from place
         if any(k in place_l for k in ["delhi", "mumbai", "goa", "udaipur", "jaipur", "jodhpur", "india"]):
             currency = "INR"
         elif any(k in place_l for k in ["lahore", "karachi", "islamabad", "bhurban", "hunza", "pakistan"]):
             currency = "PKR"
         else:
             currency = "USD"
-            
-    # Parse User Budget Max Value
+
     nums = [float(s) for s in re.findall(r'\d+\.?\d*', budget_str)]
     if not nums:
         return True, "", 0.0
     max_val = max(nums)
-    
-    # Apply multipliers
+
     budget_val = budget_str.lower()
     multiplier = 1.0
     if "k" in budget_val:
@@ -439,40 +338,31 @@ def check_budget_feasibility(memory: dict) -> tuple[bool, str, float]:
         multiplier = 1000000.0
     elif "crore" in budget_val or "cr" in budget_val:
         multiplier = 10000000.0
-        
-    user_budget_nominal = max_val * multiplier
-    
-    # Convert User Budget to USD for comparison
-    user_budget_usd = user_budget_nominal
+
+    user_budget_usd = max_val * multiplier
     if currency == "INR":
-        user_budget_usd = user_budget_nominal / 85.0
+        user_budget_usd /= 85.0
     elif currency == "PKR":
-        user_budget_usd = user_budget_nominal / 280.0
+        user_budget_usd /= 280.0
     elif currency == "AED":
-        user_budget_usd = user_budget_nominal / 3.67
+        user_budget_usd /= 3.67
     elif currency == "GBP":
-        user_budget_usd = user_budget_nominal / 0.78
+        user_budget_usd /= 0.78
     elif currency == "EUR":
-        user_budget_usd = user_budget_nominal / 0.92
-        
-    # 4. Compare
+        user_budget_usd /= 0.92
+
     if user_budget_usd < estimated_cost_usd:
-        # Infeasible! Format estimated cost in user's currency
-        formatted_est = format_cost(estimated_cost_usd, currency)
-        return False, formatted_est, estimated_cost_usd
-        
+        return False, format_cost(estimated_cost_usd, currency), estimated_cost_usd
+
     return True, "", estimated_cost_usd
 
 
-class StagePolicy:
-    """
-    Backend enforcement and stage behavior.
+# ============================================================================
+# STAGE POLICY CLASS
+# ============================================================================
 
-    Provides:
-    - Stage completion checks (deterministic, backend-owned)
-    - Transition validation
-    - Final stage decision resolution (backend overrides AI proposals)
-    """
+class StagePolicy:
+    """Backend gate — validates AI decisions against deterministic rules."""
 
     @staticmethod
     def is_ai_required(stage: str) -> bool:
@@ -490,7 +380,7 @@ class StagePolicy:
 
     @staticmethod
     def validate_transition(from_stage: str, to_stage: str, decision_type: str) -> tuple[bool, str | None]:
-        """Returns (is_valid, error_reason). Backend uses this to reject invalid stage moves."""
+        """Returns (is_valid, error_reason)."""
         try:
             from_s = StageId(from_stage)
             to_s = StageId(to_stage)
@@ -502,16 +392,10 @@ class StagePolicy:
             return False, f"Transition {from_stage}→{to_stage} not allowed"
 
         if decision_type == StageDecisionType.STAY.value and from_s != to_s:
-            return False, "STAY decision must keep same stage"
-
-        if decision_type == StageDecisionType.REANCHOR.value:
-            if from_s == to_s:
-                return True, None
+            return False, "STAY must keep same stage"
+        if decision_type == StageDecisionType.REANCHOR.value and from_s != to_s:
             return False, "REANCHOR must keep same stage"
-
-        if decision_type == StageDecisionType.REQUEST_CLARIFICATION.value:
-            if from_s == to_s:
-                return True, None
+        if decision_type == StageDecisionType.REQUEST_CLARIFICATION.value and from_s != to_s:
             return False, "REQUEST_CLARIFICATION must keep same stage"
 
         if decision_type == StageDecisionType.JUMP.value:
@@ -521,9 +405,8 @@ class StagePolicy:
                 to_idx = order.index(to_s)
             except ValueError:
                 return False, "Unknown stage in JUMP"
-            if to_idx <= from_idx:
-                return True, None
-            return False, f"JUMP cannot go forward from {from_stage} to {to_stage}"
+            if to_idx > from_idx:
+                return False, f"JUMP cannot go forward from {from_stage} to {to_stage}"
 
         if decision_type == StageDecisionType.ADVANCE.value:
             expected_next = from_s.next_stage()
@@ -563,8 +446,7 @@ class StagePolicy:
             return bool((direction.get("selectedDirectionId") or "").strip())
 
         if stage_id == StageId.S7_EVENTS:
-            logistics = memory.get("logistics", {}) or {}
-            events = logistics.get("events") or []
+            events = (memory.get("logistics", {}) or {}).get("events") or []
             return len(events) >= 1
 
         if stage_id == StageId.S8_GUESTS:
@@ -578,24 +460,17 @@ class StagePolicy:
             )
 
         if stage_id == StageId.S9_BUDGET:
-            budget = memory.get("logistics", {}).get("budget") or {}
+            budget = (memory.get("logistics") or {}).get("budget") or (memory.get("earlySignals") or {}).get("budget") or {}
             has_budget = bool((budget.get("range") or budget.get("amount") or "").strip())
             if not has_budget:
                 return False
-            
-            # Evaluate feasibility
             is_feasible, _, _ = check_budget_feasibility(memory)
             if is_feasible:
                 return True
-                
-            # If not feasible, check for overrides or if both budget and requirements are confirmed fixed
             override = budget.get("userConfirmedOverride", False)
             budget_fixed = budget.get("budgetFixed", False)
             reqs_fixed = budget.get("requirementsFixed", False)
-            if override or (budget_fixed and reqs_fixed):
-                return True
-                
-            return False
+            return bool(override or (budget_fixed and reqs_fixed))
 
         if stage_id == StageId.S10_VENDORS:
             prefs = memory.get("logistics", {}).get("vendorPreferences") or {}
@@ -604,53 +479,21 @@ class StagePolicy:
         return False
 
     @staticmethod
-    def events_finalize_cue(message: str) -> bool:
-        """User signals the event list is complete."""
-        msg_l = message.lower()
-        return any(
-            cue in msg_l
-            for cue in (
-                "that's all", "thats all", "only these", "just these", "no other",
-                "no others", "that's it", "thats it", "done with events",
-                "these are the events", "only want", "just want these",
-            )
-        )
-
-    @staticmethod
-    def resolve_final_decision(
-        ai_decision_type: str,
-        ai_to_stage: str,
-        current_stage: str,
-    ) -> tuple[str, str]:
-        """
-        Given AI's proposed decision, returns backend-validated (decision_type, to_stage).
-        If AI proposal is invalid, defaults to STAY on current stage.
-        """
-        is_valid, _ = StagePolicy.validate_transition(
-            current_stage, ai_to_stage, ai_decision_type
-        )
-        if is_valid:
-            return ai_decision_type, ai_to_stage
-        return StageDecisionType.STAY.value, current_stage
-
-    @staticmethod
     def resolve_final_decision_with_memory(
         ai_decision_type: str,
         ai_to_stage: str,
         current_stage: str,
         memory: dict,
-        *,
-        open_questions: list | None = None,
     ) -> tuple[str, str, str | None]:
         """
-        Backend-owned final stage decision after memory patch is applied.
-        Returns (decision_type, to_stage, reason_code).
+        Backend gate — validates AI decision. 
+        Blocks advance when stage is incomplete. Auto-advances when complete.
         """
         is_valid, _ = StagePolicy.validate_transition(
             current_stage, ai_to_stage, ai_decision_type
         )
 
-        # Explicit jump (correction to earlier stage)
+        # Jump (correction to earlier stage) — validate
         if ai_decision_type == StageDecisionType.JUMP.value:
             jump_ok, _ = StagePolicy.validate_transition(
                 current_stage, ai_to_stage, StageDecisionType.JUMP.value
@@ -658,21 +501,11 @@ class StagePolicy:
             if jump_ok:
                 return ai_decision_type, ai_to_stage, "jump_correction"
 
-        # Re-anchor stays on current stage but reframes
+        # Reanchor / request_clarification — always honor
         if ai_decision_type == StageDecisionType.REANCHOR.value:
             return StageDecisionType.REANCHOR.value, current_stage, "reanchor"
-
-        # Clarification: always honor
         if ai_decision_type == StageDecisionType.REQUEST_CLARIFICATION.value:
-            return (
-                StageDecisionType.REQUEST_CLARIFICATION.value,
-                current_stage,
-                "need_clarification",
-            )
-
-        # Do not advance while model still has open questions
-        if open_questions and ai_decision_type == StageDecisionType.ADVANCE.value:
-            return StageDecisionType.STAY.value, current_stage, "open_questions_block_advance"
+            return StageDecisionType.REQUEST_CLARIFICATION.value, current_stage, "need_clarification"
 
         # S5 brief: advance via synthesis only
         if current_stage == StageId.S5_BRIEF.value:
@@ -680,11 +513,7 @@ class StagePolicy:
                 return ai_decision_type, ai_to_stage, "ai_stay"
             return StageDecisionType.STAY.value, current_stage, "awaiting_brief_synthesis"
 
-        # Honor explicit AI STAY decision
-        if is_valid and ai_decision_type == StageDecisionType.STAY.value:
-            return ai_decision_type, ai_to_stage, "ai_stay_respected"
-
-        # Auto-advance when memory is complete
+        # Auto-advance when memory for current stage is complete
         if StagePolicy.is_stage_complete(current_stage, memory):
             try:
                 next_stage = StageId(current_stage).next_stage()
@@ -692,36 +521,23 @@ class StagePolicy:
                 next_stage = None
             if next_stage:
                 ok, _ = StagePolicy.validate_transition(
-                    current_stage,
-                    next_stage.value,
-                    StageDecisionType.ADVANCE.value,
+                    current_stage, next_stage.value, StageDecisionType.ADVANCE.value
                 )
                 if ok:
-                    return (
-                        StageDecisionType.ADVANCE.value,
-                        next_stage.value,
-                        "memory_complete_auto_advance",
-                    )
+                    return StageDecisionType.ADVANCE.value, next_stage.value, "memory_complete_auto_advance"
 
-        # Gated stages: never honor advance when stage is incomplete
-        _gated = {
-            StageId.S2_BASICS.value,
-            StageId.S3_PERSONALITY.value,
-            StageId.S4_VIBE.value,
-            StageId.S6_DIRECTIONS.value,
-            StageId.S7_EVENTS.value,
-            StageId.S8_GUESTS.value,
-            StageId.S9_BUDGET.value,
-            StageId.S10_VENDORS.value,
-        }
+        # Honor explicit AI STAY when stage is incomplete
+        if is_valid and ai_decision_type == StageDecisionType.STAY.value:
+            return ai_decision_type, ai_to_stage, "ai_stay_respected"
+
+        # Block advance when stage is incomplete
         if (
-            current_stage in _gated
-            and not StagePolicy.is_stage_complete(current_stage, memory)
+            not StagePolicy.is_stage_complete(current_stage, memory)
             and ai_decision_type == StageDecisionType.ADVANCE.value
         ):
             return StageDecisionType.STAY.value, current_stage, "memory_incomplete_block_advance"
 
-        # Honor valid AI advance for non-gated stages
+        # Honor valid AI advance
         if is_valid and ai_decision_type == StageDecisionType.ADVANCE.value:
             return ai_decision_type, ai_to_stage, "ai_advance"
 
@@ -729,15 +545,12 @@ class StagePolicy:
 
     @staticmethod
     def infer_synthesis_type(stage: str, memory: dict | None = None) -> str | None:
-        """Map synthesis stages to synthesis type when client omits it."""
+        """Map synthesis stages to synthesis type."""
         from app.domain.memory_schema import resolve_primary_vibe
-
         memory = memory or {}
 
         if stage == StageId.S4_VIBE.value:
-            if resolve_primary_vibe(memory):
-                return SynthesisType.BRIEF.value
-            return None
+            return SynthesisType.BRIEF.value if resolve_primary_vibe(memory) else None
 
         if stage == StageId.S5_BRIEF.value and memory:
             brief = memory.get("brief", {})
@@ -752,17 +565,3 @@ class StagePolicy:
             StageId.S11_SUMMARY.value: SynthesisType.SUMMARY.value,
         }
         return mapping.get(stage)
-
-    @staticmethod
-    def get_stage_prompt_context(stage: str) -> dict:
-        """Return stage-specific context hints for prompts (backward compat)."""
-        config = STAGE_CONFIG.get(stage)
-        if not config:
-            return {}
-        return {
-            "goal": config["goal"],
-            "advanceCondition": config["advanceCondition"],
-            "stateless": config.get("stateless", False),
-            "extractionRules": config.get("extractionRules", ""),
-            "missingFieldsHint": config.get("missingFieldsHint", []),
-        }

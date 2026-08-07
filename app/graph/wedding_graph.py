@@ -1,29 +1,20 @@
 """
 Wedding AI Pipeline — Sequential async pipeline for conversation turns.
 
-Flow for process_conversation_turn:
+Simplified flow for process_conversation_turn:
   1. Load session + process images
-  2. Data Extraction (AI Call 1)  — extract_and_validate()
-  3. Context Building             — build_turn_context() [pure Python]
-  4. Response Planning (AI Call 2)— build_response_planner_prompt() + call_llm()
-  5. Apply memory patch           — MemoryService.apply_patch()
-  6. Resolve final stage          — StagePolicy.resolve_final_decision_with_memory()
-  7. Auto-synthesis chains        — S4→S5 brief, S6 direction refresh on correction
+  2. Data Extraction (AI Call 1)
+  3. Apply extraction patch
+  4. Auto-confirm early signals for budget (s8→s9 transition)
+  5. Response Planning (AI Call 2) — agent decides stageDecision
+  6. Backend gate: validate AI's stageDecision with is_stage_complete()
+  7. Auto-synthesis chains (S4→S5 brief)
   8. Persist + return response
-
-Synthesis flows (process_synthesis_request) and S1 (process_s1_names) are unchanged.
-
-Refactored: response helpers → response_builder.py, direction flow → direction_service.py,
-synthesis flow → synthesis_service.py.
 """
-
 from __future__ import annotations
 
-import copy
 import re
 import uuid
-from typing import Any
-
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,56 +26,34 @@ from app.domain.enums import (
 from app.domain.memory_schema import (
     build_planner_notes_view, build_selected_chips, resolve_primary_vibe,
 )
-
 from app.services.ai.ai_gateway import AIGatewayError, call_llm
 from app.services.ai.data_extractor import extract_and_validate
 from app.services.ai.image_service import analyse_images
 from app.services.ai.prompt_builder import build_response_planner_prompt
-from app.services.policy.context_builder import build_turn_context, merge_early_signals
-from app.services.policy.correction_policy import (
-    apply_stale_artifact_markers,
-    detect_upstream_correction,
-    resolve_correction_stage_decision,
-)
 from app.services.policy.planner_reply_policy import align_planner_reply
-from app.utils.ai_response_validators import sanitize_ai_response, validate_ai_response
-from app.services.policy.stage_policy import StagePolicy
+from app.services.policy.stage_policy import StagePolicy, check_budget_feasibility
 from app.services.session.memory_service import MemoryService
 from app.services.session.session_service import SessionService
 from app.services.ui.observability import log_ai_turn
 from app.services.ui.ui_hints import build_ui_suggestions
+from app.utils.ai_response_validators import sanitize_ai_response, validate_ai_response
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Imports from extracted modules
-# ─────────────────────────────────────────────────────────────────────────────
-from app.graph.response_builder import (
-    make_error_response,
-    response_dict,
-)
-from app.graph.direction_service import (
-    is_direction_request,
-    build_direction_planner_reply,
-)
+from app.graph.response_builder import make_error_response, response_dict
+from app.graph.direction_service import is_direction_request
 from app.graph.synthesis_service import (
-    execute_synthesis,
-    seed_tentative_guest_counts,
-    summarize_correction_for_reply,
-    # Re-export for backward compatibility
+    execute_synthesis, seed_tentative_guest_counts,
     process_synthesis_request,
 )
 
-# Backward-compatible aliases (internal callers used underscore-prefixed names)
-_extract_brief_artifact_if_present = None  # No longer needed — use response_builder directly
+# Backward-compatible aliases
 _make_error_response = make_error_response
 _response_dict = response_dict
-_is_direction_request = is_direction_request
-_build_direction_planner_reply = build_direction_planner_reply
-_execute_synthesis = execute_synthesis
-_summarize_correction_for_reply = summarize_correction_for_reply
+_process_synthesis_request = process_synthesis_request
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Primary Workflows
+# S1 — System-handled, no AI call
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def process_s1_names(
@@ -92,7 +61,7 @@ async def process_s1_names(
     groom_name: str,
     bride_name: str,
 ) -> dict:
-    """S1 — System-handled. No AI call. Creates session, seeds identity, advances to S2."""
+    """S1 — Creates session, seeds identity, advances to S2."""
     request_id = uuid.uuid4()
     session, memory_v0 = await SessionService.create_session(db, groom_name, bride_name)
 
@@ -108,10 +77,8 @@ async def process_s1_names(
         f"What wedding destination are you dreaming of, and what time of year are you planning for?"
     )
     await SessionService.append_message(
-        db,
-        session_id=session.id,
-        role=MessageRole.PLANNER.value,
-        content=welcome,
+        db, session_id=session.id,
+        role=MessageRole.PLANNER.value, content=welcome,
         message_type=MessageType.CONVERSATION_TURN.value,
         stage=StageId.S1_NAMES.value,
         source=ResponseSource.SYSTEM.value,
@@ -140,6 +107,26 @@ async def process_s1_names(
 # Main Conversation Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _merge_early_signals(existing: dict, new: dict) -> dict:
+    """Merge two earlySignals dicts. Lists deduped, dicts merged."""
+    merged = dict(existing)
+    for key in ("personality", "vibe", "events"):
+        new_list = new.get(key) or []
+        if new_list:
+            existing_list = merged.get(key) or []
+            merged[key] = list(dict.fromkeys(existing_list + new_list))
+    for key in ("budget", "vendors"):
+        new_dict = new.get(key) or {}
+        if new_dict:
+            merged[key] = {**(merged.get(key) or {}), **new_dict}
+    new_gc = new.get("guestCount")
+    if new_gc and isinstance(new_gc, (int, float)) and new_gc > 0:
+        existing_gc = merged.get("guestCount")
+        if not existing_gc or new_gc > existing_gc:
+            merged["guestCount"] = int(new_gc)
+    return merged
+
+
 async def process_conversation_turn(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -147,13 +134,13 @@ async def process_conversation_turn(
     images: list[str] | None = None,
 ) -> dict:
     """
-    Main sequential pipeline for conversation_turn events.
+    Main pipeline for conversation turns.
 
     Phase 1: Load session + process images
     Phase 2: Data Extraction (AI Call 1)
-    Phase 3: Context Building (pure Python)
-    Phase 4: Response Planning (AI Call 2)
-    Phase 5: Apply memory + resolve stage
+    Phase 3: Apply extraction patch + early signals
+    Phase 4: Response Planning (AI Call 2) — agent decides everything
+    Phase 5: Backend gate + resolve stage
     Phase 6: Return response
     """
     request_id = uuid.uuid4()
@@ -170,7 +157,6 @@ async def process_conversation_turn(
         raise ValueError(f"No memory for session {session_id}")
 
     memory = mem_version.memory_json
-    memory_before = copy.deepcopy(memory)
     version_no = mem_version.version_no
 
     # Process images (if any)
@@ -180,18 +166,14 @@ async def process_conversation_turn(
         if vis_patch:
             vis_mem = await MemoryService.apply_patch(db, session, vis_patch, request_id=request_id)
             memory = vis_mem.memory_json
-            memory_before = copy.deepcopy(memory)
             version_no = vis_mem.version_no
 
-    # Load recent messages for prompt history
+    # Load recent messages
     all_messages = await SessionService.get_recent_messages(db, session_id, limit=21)
-    recent_messages = [
-        {"role": m.role, "content": m.content_text}
-        for m in all_messages
-    ]
+    recent_messages = [{"role": m.role, "content": m.content_text} for m in all_messages]
 
-    # S5 / S6 direction shortcut (user explicitly asks for directions or alternative directions)
-    if (stage == StageId.S5_BRIEF.value or stage == StageId.S6_DIRECTIONS.value) and is_direction_request(user_message):
+    # S5 / S6 direction shortcut
+    if (stage in (StageId.S5_BRIEF.value, StageId.S6_DIRECTIONS.value)) and is_direction_request(user_message):
         await SessionService.append_message(
             db, session_id=session_id,
             role=MessageRole.CLIENT.value, content=user_message,
@@ -207,20 +189,17 @@ async def process_conversation_turn(
     # ── Phase 2: Data Extraction (AI Call 1) ──────────────────────────────────
     extraction = await extract_and_validate(stage, memory, user_message)
 
-    # ── Phase 2.5: Apply Extraction Patch to DB IMMEDIATELY ──────────────────
-    # Committing validated data BEFORE context building ensures the context
-    # builder operates on real committed state, not a tentative scratch merge.
-    # This fixes: agent staying on stage even after data was just extracted.
+    # ── Phase 3: Apply Extraction Patch ──────────────────────────────────────
     extraction_patch: dict = extraction.validated_patch or {}
     if extraction_patch and not extraction.is_meta():
-        # Compute displayName before applying — so it's always stored correctly
+        # Compute displayName
         if "identity" in extraction_patch:
             _ip = dict(extraction_patch["identity"])
             _groom = (_ip.get("groomName") or "").strip()
             _bride = (_ip.get("brideName") or "").strip()
-            _display_names = [n for n in [_groom, _bride] if n]
-            if _display_names:
-                _ip["displayName"] = " & ".join(_display_names)
+            _names = [n for n in [_groom, _bride] if n]
+            if _names:
+                _ip["displayName"] = " & ".join(_names)
             extraction_patch = {**extraction_patch, "identity": _ip}
 
         try:
@@ -231,13 +210,12 @@ async def process_conversation_turn(
             )
             memory = ex_mem.memory_json
             version_no = ex_mem.version_no
-
         except Exception as _ep:
             import logging as _log
             _log.getLogger(__name__).warning("Extraction patch apply failed: %s", _ep)
             extraction_patch = {}
 
-        # Handle identity / name updates immediately (update session record)
+        # Update session names if identity changed
         if "identity" in extraction_patch:
             _ip = extraction_patch["identity"]
             await SessionService.update_names(
@@ -246,56 +224,82 @@ async def process_conversation_turn(
                 bride_name=_ip.get("brideName") or None,
             )
 
-    # S9 budget auto-confirm early signals (either on S9, or advancing to S9 from S8)
-    is_s8_complete_and_advancing = (
-        stage == StageId.S8_GUESTS.value 
+    # Merge early signals into memory
+    if not extraction.is_meta() and extraction.has_early_signals():
+        combined_early = _merge_early_signals(
+            memory.get("earlySignals") or {},
+            extraction.early_signals,
+        )
+        if any(v for v in combined_early.values() if v):
+            es_mem = await MemoryService.apply_patch(
+                db, session, {"earlySignals": combined_early}, request_id=request_id
+            )
+            memory = es_mem.memory_json
+            version_no = es_mem.version_no
+
+    # Auto-confirm early signals budget when entering s9
+    is_s8_advancing = (
+        stage == StageId.S8_GUESTS.value
         and StagePolicy.is_stage_complete(StageId.S8_GUESTS.value, memory)
     )
-    if stage == StageId.S9_BUDGET.value or is_s8_complete_and_advancing:
+    if stage == StageId.S9_BUDGET.value or is_s8_advancing:
         logistics_budget = memory.get("logistics", {}).get("budget") or {}
         early_budget = memory.get("earlySignals", {}).get("budget") or {}
         if not logistics_budget.get("range") and early_budget.get("range"):
             auto_patch = {"logistics": {"budget": early_budget}}
+            new_mem = await MemoryService.apply_patch(db, session, auto_patch, request_id=request_id)
+            memory = new_mem.memory_json
+            version_no = new_mem.version_no
+
+    # Seed tentative guest counts if entering S8
+    if stage == StageId.S8_GUESTS.value:
+        memory_seeded = seed_tentative_guest_counts(memory)
+        if memory_seeded != memory:
             new_mem = await MemoryService.apply_patch(
-                db, session, auto_patch, request_id=request_id
+                db, session, {"logistics": memory_seeded.get("logistics") or {}}, request_id=request_id
             )
             memory = new_mem.memory_json
             version_no = new_mem.version_no
 
+    # S4 vibe sync
+    if stage == StageId.S4_VIBE.value:
+        resolved = resolve_primary_vibe(memory)
+        if resolved and not (memory.get("vibe") or {}).get("primaryVibe"):
+            sync = await MemoryService.apply_patch(
+                db, session, {"vibe": {"primaryVibe": resolved}}, request_id=request_id,
+            )
+            memory = sync.memory_json
+            version_no = sync.version_no
 
-
-    # ── Phase 3: Context Building (pure Python) ───────────────────────────────
-    # ctx now operates on the DB-committed memory (real state, not tentative)
-    ctx = build_turn_context(stage, memory, extraction)
-
-    # Seed tentative guest counts if entering/on S8 and guestCounts is empty
-    if stage == StageId.S8_GUESTS.value or (ctx and ctx.stage_decision and ctx.stage_decision.get("stage") == StageId.S8_GUESTS.value):
-        memory_seeded = seed_tentative_guest_counts(memory)
-        if memory_seeded != memory:
-            new_mem = await MemoryService.apply_patch(db, session, memory_seeded.get("logistics") or {}, request_id=request_id)
-            memory = new_mem.memory_json
-            updated_version = new_mem.version_no
+    # ── Compute budget feasibility for prompt ─────────────────────────────────
+    budget_feasibility = "(not applicable)"
+    if stage in (StageId.S8_GUESTS.value, StageId.S9_BUDGET.value) or is_s8_advancing:
+        is_feasible, est_cost_str, _ = check_budget_feasibility(memory)
+        if not is_feasible and est_cost_str:
+            budget_feasibility = f"INFEASIBLE — suggested minimum: {est_cost_str}. User must increase budget or adjust requirements."
+        elif is_feasible:
+            budget_feasibility = "Budget is feasible for the selected destination, events, and guest counts."
 
     # ── Phase 4: Response Planning (AI Call 2) ────────────────────────────────
     messages = build_response_planner_prompt(
         stage=stage,
         memory=memory,
         recent_messages=recent_messages,
-        ctx=ctx,
+        extraction_summary=extraction.extraction_summary,
+        extraction_patch=extraction_patch,
         user_message=user_message,
         image_context=image_context,
+        budget_feasibility=budget_feasibility,
     )
 
     ai_result: dict | None = None
     telemetry: dict = {}
     error_code: str | None = None
-    error_message: str | None = None
 
     try:
         ai_result, telemetry = await call_llm(messages, stage, EventType.CONVERSATION_TURN.value)
     except AIGatewayError as e:
         error_code = e.code
-        error_message = e.message
         telemetry = {
             "model": settings.active_chat_model,
             "provider": settings.llm_provider,
@@ -311,56 +315,28 @@ async def process_conversation_turn(
             validation_status="rejected",
             failure_code=error_code or "UNKNOWN",
         )
-        return make_error_response(
-            request_id, session_id, stage, memory,
-            error_code or "AI_CALL_FAILED",
-        )
+        return make_error_response(request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED")
 
-    # ── Sanitize & enforce meta-intent constraints ─────────────────────────────
+    # ── Sanitize AI response ──────────────────────────────────────────────────
     ai_result = sanitize_ai_response(ai_result, stage)
-    meta_intent = ctx.meta_intent
+    meta_intent = extraction.meta_intent
 
+    # Meta turn enforcement
     if meta_intent == "gibberish":
         ai_result["memoryPatch"] = {}
-        if stage == StageId.S5_BRIEF.value:
-            ai_result["stageDecision"] = {
-                "type": StageDecisionType.STAY.value,
-                "stage": stage,
-            }
-            if not (ai_result.get("plannerReply") or "").strip():
-                ai_result["plannerReply"] = (
-                    "Everything is saved in your wedding vision brief right below! Whenever you're ready, tap 'Show me directions' to explore design concepts."
-                )
-        else:
-            ai_result["stageDecision"] = {
-                "type": StageDecisionType.REQUEST_CLARIFICATION.value,
-                "stage": stage,
-            }
-            if not (ai_result.get("plannerReply") or "").strip():
-                import random
-                _fallbacks = [
-                    "I didn't quite catch that! Could you please clarify your preference?",
-                    "Hmm, I'm not sure I understood that correctly! Could you rephrase your thoughts?",
-                    "I want to make sure I capture your exact vision — could you tell me a bit more?",
-                ]
-                ai_result["plannerReply"] = random.choice(_fallbacks)
-    elif meta_intent in ("help", "more_suggestions"):
-        ai_result["memoryPatch"] = {}
         ai_result["stageDecision"] = {
-            "type": StageDecisionType.STAY.value,
-            "stage": stage,
+            "type": StageDecisionType.REQUEST_CLARIFICATION.value, "stage": stage,
         }
         if not (ai_result.get("plannerReply") or "").strip():
-            ai_result["plannerReply"] = (
-                "I'm Happinest, your personal AI wedding planner! I'm here to help you design and organize your dream wedding. "
-                "How can I assist you with your plans?"
-            )
-
-    else:
-        # Override AI's stageDecision with context builder's authoritative decision.
-        # ctx.stage_decision was computed on real committed memory after extraction —
-        # this fixes: AI saying "stay" even though stage data is already complete.
-        ai_result["stageDecision"] = ctx.stage_decision
+            import random
+            ai_result["plannerReply"] = random.choice([
+                "I didn't quite catch that! Could you please clarify?",
+                "Hmm, I'm not sure I understood — could you rephrase?",
+                "I want to make sure I capture your vision — could you tell me more?",
+            ])
+    elif meta_intent in ("help", "more_suggestions"):
+        ai_result["memoryPatch"] = {}
+        ai_result["stageDecision"] = {"type": StageDecisionType.STAY.value, "stage": stage}
 
     is_valid, val_error = validate_ai_response(ai_result, stage)
     if not is_valid:
@@ -373,51 +349,18 @@ async def process_conversation_turn(
             validation_status="rejected",
             failure_code=val_error,
         )
-        return make_error_response(
-            request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}"
-        )
+        return make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
 
-    # ── Phase 5: Apply Additional Memory Patch ───────────────────────────────
-    # Extraction patch was already committed (Phase 2.5).
-    # Now apply ADDITIONAL data: earlySignals from extraction + any non-extraction
-    # AI patches (e.g. eventsConfirmed set by AI, extra personality signals).
+    # ── Phase 5: Apply AI memory patch + resolve stage ────────────────────────
     ai_patch = ai_result.get("memoryPatch") or {}
-
-    additional_patch: dict = {}
-
-    # Carry over AI patches for fields NOT already committed by extraction
-    from app.utils.validators import is_past_date
-    for _k, _v in ai_patch.items():
-        if _k not in extraction_patch and _k != "earlySignals":
-            if _k == "occasion" and isinstance(_v, dict):
-                _v_copy = dict(_v)
-                _dp = (_v_copy.get("datePreference") or "").strip()
-                if _dp and is_past_date(_dp):
-                    _v_copy.pop("datePreference", None)
-                if _v_copy:
-                    additional_patch[_k] = _v_copy
-            else:
-                additional_patch[_k] = _v
-
-
-    # Merge earlySignals: extraction early signals + any AI early signals
-    if meta_intent not in ("help", "more_suggestions", "gibberish"):
-        early_to_patch = ctx.early_signals_to_patch
-        ai_early = ai_patch.get("earlySignals") or {}
-        combined_early = merge_early_signals(
-            memory.get("earlySignals") or {},
-            merge_early_signals(ai_early, early_to_patch),
-        )
-        if any(v for v in combined_early.values() if v):
-            additional_patch["earlySignals"] = combined_early
-
-    # Combined patch for correction detection (full turn change)
-    combined_patch: dict = {**extraction_patch, **additional_patch}
-
-    updated_version = version_no
-    correction = None
     stale_sections: list = list(ai_result.get("staleSections") or [])
     open_questions: list = ai_result.get("openQuestions") or []
+
+    # Apply additional AI patch (fields not already committed by extraction)
+    additional_patch: dict = {}
+    for _k, _v in ai_patch.items():
+        if _k not in extraction_patch and _k != "earlySignals":
+            additional_patch[_k] = _v
 
     if additional_patch:
         new_mem_version = await MemoryService.apply_patch(
@@ -425,46 +368,10 @@ async def process_conversation_turn(
             request_id=request_id,
             open_questions=open_questions,
             extra_stale=stale_sections,
-            is_correction=(meta_intent == "correction"),
         )
-
         memory = new_mem_version.memory_json
-        updated_version = new_mem_version.version_no
+        version_no = new_mem_version.version_no
         stale_sections = new_mem_version.stale_sections
-
-    if combined_patch:
-        correction = detect_upstream_correction(combined_patch, memory_before, memory, stage)
-        if correction:
-            stale_patch = apply_stale_artifact_markers({}, correction["staleSections"])
-            if stale_patch:
-                new_mem_version = await MemoryService.apply_patch(
-                    db, session, stale_patch, request_id=request_id,
-                    extra_stale=correction["staleSections"],
-                )
-                memory = new_mem_version.memory_json
-                updated_version = new_mem_version.version_no
-                stale_sections = new_mem_version.stale_sections
-
-    # Identity from AI patch (extraction already handled identity in Phase 2.5)
-    if "identity" in additional_patch and "identity" not in extraction_patch:
-        _aip = additional_patch["identity"]
-        await SessionService.update_names(
-            db, session,
-            groom_name=_aip.get("groomName") or None,
-            bride_name=_aip.get("brideName") or None,
-        )
-
-    # S4 vibe sync
-    if stage == StageId.S4_VIBE.value:
-        resolved = resolve_primary_vibe(memory)
-        if resolved and not (memory.get("vibe") or {}).get("primaryVibe"):
-            sync = await MemoryService.apply_patch(
-                db, session,
-                {"vibe": {"primaryVibe": resolved}},
-                request_id=request_id,
-            )
-            memory = sync.memory_json
-            updated_version = sync.version_no
 
     # Persist client message
     _client_meta: dict = {"selectedChips": build_selected_chips(memory)}
@@ -472,54 +379,29 @@ async def process_conversation_turn(
         _client_meta["imageCount"] = len(images)
     await SessionService.append_message(
         db, session_id=session_id,
-        role=MessageRole.CLIENT.value,
-        content=user_message,
+        role=MessageRole.CLIENT.value, content=user_message,
         message_type=MessageType.CONVERSATION_TURN.value,
         stage=stage, source=None,
         request_id=request_id,
         metadata=_client_meta,
     )
 
-    # ── Resolve Final Stage ────────────────────────────────────────────────────
-    sd = ai_result.get("stageDecision") or ctx.stage_decision
+    # ── Backend gate: resolve final stage decision ────────────────────────────
+    sd = ai_result.get("stageDecision") or {"type": StageDecisionType.STAY.value, "stage": stage}
     ai_decision_type = sd.get("type", StageDecisionType.STAY.value)
     ai_to_stage = sd.get("stage", stage)
 
     if extraction.is_meta():
-        # Meta turns (help / gibberish / more_suggestions) MUST STAY on current stage
         final_decision_type = (
             StageDecisionType.REQUEST_CLARIFICATION.value
             if meta_intent == "gibberish"
             else StageDecisionType.STAY.value
         )
         final_stage = stage
-        _reason = f"meta_turn_{meta_intent}"
-    elif correction:
-        final_decision_type, final_stage, _reason = resolve_correction_stage_decision(
-            correction, stage
-        )
-        stale_sections = list(set(stale_sections) | set(correction.get("staleSections", [])))
-        if final_decision_type != StageDecisionType.JUMP.value and meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
-            final_decision_type = StageDecisionType.REANCHOR.value
-            final_stage = stage
-    elif StagePolicy.is_stage_complete(stage, memory) and not open_questions:
-        try:
-            next_s = StageId(stage).next_stage()
-            final_stage = next_s.value if next_s else stage
-            final_decision_type = StageDecisionType.ADVANCE.value
-            _reason = "stage_complete_advance"
-        except ValueError:
-            final_stage = stage
-            final_decision_type = StageDecisionType.STAY.value
-            _reason = "last_stage_stay"
     else:
         final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
             ai_decision_type, ai_to_stage, stage, memory,
-            open_questions=open_questions,
         )
-        if meta_intent == "correction" and not StagePolicy.is_stage_complete(stage, memory):
-            final_decision_type = StageDecisionType.REANCHOR.value
-            final_stage = stage
 
     if final_stage != stage:
         await SessionService.update_stage(
@@ -528,26 +410,19 @@ async def process_conversation_turn(
             decision_type=final_decision_type,
             request_id=request_id,
         )
-    elif final_decision_type == StageDecisionType.REANCHOR.value and correction:
-        await SessionService.update_stage(
-            db, session,
-            new_stage=stage,
-            decision_type=final_decision_type,
-            request_id=request_id,
-            reason_code="upstream_correction_reanchor",
-        )
 
     # ── Auto-synthesis chains ──────────────────────────────────────────────────
     synthesis_result = None
+    combined_patch = {**extraction_patch, **additional_patch}
 
-    # S4→S5: Auto-brief synthesis when vibe is complete
-    if (
+    # 1. S4→S5: Auto-brief synthesis when advancing to S5 for the first time
+    is_s4_to_s5 = (
         stage == StageId.S4_VIBE.value
         and final_stage == StageId.S5_BRIEF.value
-        and not correction
         and StagePolicy.is_stage_complete(StageId.S3_PERSONALITY.value, memory)
         and StagePolicy.is_stage_complete(StageId.S4_VIBE.value, memory)
-    ):
+    )
+    if is_s4_to_s5:
         brief_res = await execute_synthesis(
             db, session, session_id, SynthesisType.BRIEF.value,
             StageId.S5_BRIEF.value, request_id, save_planner_message=False,
@@ -555,98 +430,47 @@ async def process_conversation_turn(
         if not brief_res.get("errorCode"):
             synthesis_result = brief_res
 
-    # S6: Direction refresh on correction
-    elif correction and stage == StageId.S6_DIRECTIONS.value and (
-        correction.get("shouldRegenerateDirection")
-        or correction.get("shouldRefreshDirectionsOnS6")
-    ):
-        dir_res = await execute_synthesis(
-            db, session, session_id, SynthesisType.DIRECTION.value,
-            StageId.S6_DIRECTIONS.value, request_id, save_planner_message=False,
-        )
-        if not dir_res.get("errorCode"):
-            ack = summarize_correction_for_reply(correction, memory_before, memory)
-            opts = (dir_res.get("artifactContent") or {}).get("directionOptions") or []
-            place = (memory.get("occasion") or {}).get("place") or "your celebration"
-            dir_res["plannerReply"] = build_direction_planner_reply(opts, place, correction_ack=ack)
-            dir_res["staleSections"] = stale_sections
-            dir_res["memoryPatch"] = {**(dir_res.get("memoryPatch") or {}), **(combined_patch or {})}
-            dir_res["stageDecision"] = {
-                "type": StageDecisionType.REANCHOR.value,
-                "stage": StageId.S6_DIRECTIONS.value,
-            }
-            await SessionService.append_message(
-                db, session_id=session_id,
-                role=MessageRole.PLANNER.value,
-                content=dir_res["plannerReply"],
-                message_type=MessageType.SYNTHESIS_REQUEST.value,
-                stage=StageId.S6_DIRECTIONS.value,
-                source=dir_res.get("responseSource", ResponseSource.RULE.value),
-                request_id=request_id,
-                metadata={
-                    "selectedChips": build_selected_chips(memory),
-                    "artifactType": "direction",
-                    "artifactContent": dir_res.get("artifactContent"),
-                    "correctionAck": True,
-                },
-            )
-            synthesis_result = dir_res
-
-    # Brief refresh on correction (S5/S6)
-    elif correction and correction.get("shouldRegenerateBrief"):
-        brief_res = await execute_synthesis(
-            db, session, session_id, SynthesisType.BRIEF.value,
-            stage, request_id, save_planner_message=False,
-        )
-        if not brief_res.get("errorCode"):
-            ack = summarize_correction_for_reply(correction, memory_before, memory)
-            brief_text = (brief_res.get("artifactContent") or {}).get("briefText") or ""
-            refreshed = (
-                f"{ack}\n\n{brief_text}" if brief_text
-                else f"{ack} {brief_res.get('plannerReply', '')}".strip()
-            )
-            brief_res["plannerReply"] = refreshed
-            brief_res["staleSections"] = stale_sections
-            brief_res["memoryPatch"] = {**(brief_res.get("memoryPatch") or {}), **(combined_patch or {})}
-            brief_res["stageDecision"] = {"type": StageDecisionType.REANCHOR.value, "stage": stage}
-            await SessionService.append_message(
-                db, session_id=session_id,
-                role=MessageRole.PLANNER.value,
-                content=refreshed,
-                message_type=MessageType.SYNTHESIS_REQUEST.value,
-                stage=stage,
-                source=brief_res.get("responseSource", ResponseSource.OPENAI.value),
-                request_id=request_id,
-                metadata={
-                    "selectedChips": build_selected_chips(memory),
-                    "artifactType": "brief",
-                    "artifactContent": brief_res.get("artifactContent"),
-                    "correctionAck": True,
-                },
-            )
-            synthesis_result = brief_res
-
     if synthesis_result:
         return synthesis_result
 
+    # 2. Silent Brief update at S5+: when S1-S4 fields (names, place, date, vibe, personality) are updated
+    _S5_PLUS = {
+        StageId.S5_BRIEF.value, StageId.S6_DIRECTIONS.value, StageId.S7_EVENTS.value,
+        StageId.S8_GUESTS.value, StageId.S9_BUDGET.value, StageId.S10_VENDORS.value,
+        StageId.S11_SUMMARY.value,
+    }
+    is_at_s5_plus = (stage in _S5_PLUS or final_stage in _S5_PLUS)
+    has_early_section_update = any(
+        sec in combined_patch for sec in ("identity", "occasion", "personality", "vibe")
+    )
+
+    if is_at_s5_plus and has_early_section_update:
+        try:
+            brief_res = await execute_synthesis(
+                db, session, session_id, SynthesisType.BRIEF.value,
+                stage, request_id, save_planner_message=False,
+            )
+            if brief_res and brief_res.get("updatedMemoryVersion"):
+                latest_mem = await MemoryService.get_latest_memory(db, session_id)
+                if latest_mem:
+                    memory = latest_mem.memory_json
+                    version_no = latest_mem.version_no
+        except Exception as _be:
+            import logging
+            logging.getLogger(__name__).warning("Silent brief update failed: %s", _be)
+
     # ── Build & Return Response ────────────────────────────────────────────────
-    # Chips are ONLY meaningful on stages that have selectable options.
-    # S1, S2, S5, S6, S8, S9, S11 → empty list (agent asks directly, no chips)
     _CHIP_STAGES = frozenset({
-        StageId.S2_BASICS.value,
-        StageId.S3_PERSONALITY.value,
-        StageId.S4_VIBE.value,
-        StageId.S7_EVENTS.value,
+        StageId.S2_BASICS.value, StageId.S3_PERSONALITY.value,
+        StageId.S4_VIBE.value, StageId.S7_EVENTS.value,
     })
     effective_stage = final_stage if final_stage != stage else stage
     if effective_stage not in _CHIP_STAGES or meta_intent == "gibberish":
         suggestions = []
     else:
-        suggestion_stage = effective_stage
         suggestions = build_ui_suggestions(
             stage, memory, ai_result.get("suggestions", []),
-            for_stage=suggestion_stage,
-            prefer_custom=(meta_intent == "more_suggestions"),
+            for_stage=effective_stage,
         )
         suggestions = [
             s for s in suggestions
@@ -654,26 +478,14 @@ async def process_conversation_turn(
             and not re.search(r"guestcount|_guests$|_estimate", s, re.I)
         ]
 
-
-
-    correction_ack = ""
-    if correction:
-        correction_ack = summarize_correction_for_reply(correction, memory_before, memory)
-
     planner_reply = align_planner_reply(
         ai_reply=ai_result.get("plannerReply", "") or "",
-        from_stage=stage,
         to_stage=final_stage,
-        decision_type=final_decision_type,
-        memory=memory,
-        correction=correction,
-        correction_ack=correction_ack,
     )
 
     await SessionService.append_message(
         db, session_id=session_id,
-        role=MessageRole.PLANNER.value,
-        content=planner_reply,
+        role=MessageRole.PLANNER.value, content=planner_reply,
         message_type=MessageType.CONVERSATION_TURN.value,
         stage=final_stage,
         source=ResponseSource.OPENAI.value,
@@ -694,10 +506,11 @@ async def process_conversation_turn(
         validation_status="accepted",
     )
 
+    combined_patch = {**extraction_patch, **additional_patch}
     return response_dict(
         request_id, session_id, ResponseSource.OPENAI.value, planner_reply, memory,
         memory_patch=combined_patch,
-        updated_version=updated_version,
+        updated_version=version_no,
         stage_decision={"type": final_decision_type, "stage": final_stage},
         stale_sections=stale_sections,
         open_questions=open_questions,

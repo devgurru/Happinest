@@ -13,7 +13,7 @@ CHIP_POOLS: dict[str, list[str]] = {
     "s3_personality": [
         # Relationship type
         "College sweethearts", "Childhood sweethearts", "Work colleagues",
-        "Long-distance couple", "Arranged match", "DU sweethearts",
+        "Long distance couple", "Arranged match", "DU sweethearts",
         # Lifestyle
         "Foodies", "Travel lovers", "Dog people", "Cat people", "Fitness freaks",
         "Night owls", "Early risers", "Beach lovers", "Mountain people",

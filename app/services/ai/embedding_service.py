@@ -2,8 +2,6 @@
 Embedding Service — generates text embeddings via OpenAI text-embedding-3-small.
 Used at S6 (direction synthesis) to find matching event sites via cosine similarity.
 """
-import json
-
 import httpx
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +47,6 @@ def build_memory_search_text(memory: dict) -> str:
     """
     parts = []
 
-    identity = memory.get("identity", {})
     occasion = memory.get("occasion", {})
     personality = memory.get("personality", {})
     vibe = memory.get("vibe", {})
