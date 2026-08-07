@@ -246,6 +246,23 @@ async def process_conversation_turn(
                 bride_name=_ip.get("brideName") or None,
             )
 
+    # S9 budget auto-confirm early signals (either on S9, or advancing to S9 from S8)
+    is_s8_complete_and_advancing = (
+        stage == StageId.S8_GUESTS.value 
+        and StagePolicy.is_stage_complete(StageId.S8_GUESTS.value, memory)
+    )
+    if stage == StageId.S9_BUDGET.value or is_s8_complete_and_advancing:
+        logistics_budget = memory.get("logistics", {}).get("budget") or {}
+        early_budget = memory.get("earlySignals", {}).get("budget") or {}
+        if not logistics_budget.get("range") and early_budget.get("range"):
+            auto_patch = {"logistics": {"budget": early_budget}}
+            new_mem = await MemoryService.apply_patch(
+                db, session, auto_patch, request_id=request_id
+            )
+            memory = new_mem.memory_json
+            version_no = new_mem.version_no
+
+
 
     # ── Phase 3: Context Building (pure Python) ───────────────────────────────
     # ctx now operates on the DB-committed memory (real state, not tentative)

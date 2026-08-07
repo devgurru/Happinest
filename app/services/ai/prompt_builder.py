@@ -34,11 +34,12 @@ _STAGE_MEMORY_KEYS: dict[str, list[str]] = {
     "s5_brief": ["identity", "occasion", "personality", "vibe"],
     "s6_directions": ["identity", "occasion", "personality", "vibe", "brief", "direction"],
     "s7_events": ["identity", "occasion", "personality", "vibe", "logistics", "earlySignals"],
-    "s8_guests": ["identity", "occasion", "logistics"],
+    "s8_guests": ["identity", "occasion", "logistics", "earlySignals"],
     "s9_budget": ["identity", "occasion", "logistics", "earlySignals"],
     "s10_vendors": ["identity", "occasion", "logistics", "earlySignals"],
     "s11_summary": ["identity", "occasion", "personality", "vibe", "logistics"],
 }
+
 
 
 # ─── Internal helpers ──────────────────────────────────────────────────────────
@@ -218,7 +219,34 @@ def build_response_planner_prompt(
             f"Tell them it has passed and ask for a future month/year or season instead."
         )
     elif ctx.missing_fields and ctx.stage_status in ("incomplete", "reanchor"):
-        missing_fields_str = ", ".join(ctx.missing_fields)
+        has_suggested = any("suggested:" in m for m in ctx.missing_fields)
+        if has_suggested:
+            warning = [m for m in ctx.missing_fields if "suggested:" in m][0]
+            missing_fields_str = (
+                f"CRITICAL WARNING FOR Stage {stage}: The user's budget is NOT feasible! "
+                f"You MUST explicitly tell the user that their budget is not feasible based on their selected destination, "
+                f"events, and guest counts. You MUST quote the suggested minimum budget amount from this warning: '{warning}'. "
+                f"Ask if they want to increase their budget or adjust guest counts/events/destination."
+            )
+        else:
+            missing_fields_str = ", ".join(ctx.missing_fields)
+    elif ctx.decision == "advance" and ctx.next_stage:
+        from app.services.policy.context_builder import _get_missing_fields
+        next_missing = _get_missing_fields(ctx.next_stage, memory)
+        if next_missing:
+            has_suggested = any("suggested:" in m for m in next_missing)
+            if has_suggested:
+                warning = [m for m in next_missing if "suggested:" in m][0]
+                missing_fields_str = (
+                    f"CRITICAL WARNING FOR ADVANCING TO {ctx.next_stage}: The user's budget is NOT feasible! "
+                    f"You MUST explicitly tell the user that their budget is not feasible based on their selected destination, "
+                    f"events, and guest counts. You MUST quote the suggested minimum budget amount from this warning: '{warning}'. "
+                    f"Ask if they want to increase their budget or adjust guest counts/events/destination."
+                )
+            else:
+                missing_fields_str = f"For the next stage ({ctx.next_stage}), we still need: " + ", ".join(next_missing)
+        else:
+            missing_fields_str = f"(nothing — next stage {ctx.next_stage} is already complete)"
     else:
         missing_fields_str = "(nothing — stage is complete or a meta turn)"
 

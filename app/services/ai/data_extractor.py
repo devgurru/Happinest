@@ -421,9 +421,71 @@ def _sanitise_patch_for_stage(patch: dict, stage: str, raw: dict, memory: dict, 
                 logistics["vendorPreferences"] = cleaned_vp
                 patch["logistics"] = logistics
 
+    # Ensure patch conforms strictly to the canonical schema keys
+    patch = _sanitize_extracted_patch(patch)
     # Remove empty nested dicts / empty lists from patch
     patch = _remove_empty(patch)
     return patch
+
+
+def _sanitize_extracted_patch(patch: dict) -> dict:
+    """
+    Sanitize the AI Call 1 extracted patch against the canonical memory schema.
+    Prevents database pollution (like double-saved budget or guest counts) by:
+    - Moving misplaced logistics keys from occasion to logistics.
+    - Filtering out any key that is not whitelisted in the canonical memory schema.
+    """
+    if not isinstance(patch, dict):
+        return {}
+
+    sanitized = {}
+
+    valid_sections = {
+        "identity", "occasion", "personality", "vibe",
+        "brief", "direction", "logistics", "summary"
+    }
+
+    valid_keys = {
+        "identity": {"groomName", "brideName", "displayName", "occasionType"},
+        "occasion": {
+            "place", "locationPreference", "settingPreference",
+            "datePreference", "seasonPreference", "destinationMode",
+            "specificityLevel", "country"
+        },
+        "personality": {"tags", "culturalSignals", "relationshipSignals", "lifestyleSignals", "plannerInterpretation"},
+        "vibe": {"primaryVibe", "secondaryVibes", "energyLevel", "formality", "familyRole", "plannerInterpretation"},
+        "brief": {"status", "text", "quote", "version", "generatedFromMemoryVersion"},
+        "direction": {"status", "selectedDirectionId", "options", "seenOptionIds", "selectedDirectionName", "version", "generatedFromMemoryVersion"},
+        "logistics": {"events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"},
+        "summary": {"status", "text", "version", "generatedFromMemoryVersion"}
+    }
+
+    # Move misplaced logistics keys from occasion to logistics if they exist there
+    occasion = patch.get("occasion")
+    if isinstance(occasion, dict):
+        logistics = patch.setdefault("logistics", {})
+        if not isinstance(logistics, dict):
+            logistics = {}
+            patch["logistics"] = logistics
+
+        for key in ("events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"):
+            if key in occasion:
+                val = occasion.pop(key)
+                if key not in logistics:
+                    logistics[key] = val
+
+    # Re-iterate and sanitize against canonical keys whitelist
+    for sec, val in patch.items():
+        if sec in valid_sections and isinstance(val, dict):
+            sec_keys = valid_keys[sec]
+            sanitized_sec = {}
+            for k, v in val.items():
+                if k in sec_keys:
+                    sanitized_sec[k] = v
+            if sanitized_sec:
+                sanitized[sec] = sanitized_sec
+
+    return sanitized
 
 
 def parse_vendor_preferences_by_event(message: str, events: list[str]) -> dict[str, list[str]]:

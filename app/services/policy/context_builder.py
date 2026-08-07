@@ -400,6 +400,29 @@ def _get_missing_fields(stage: str, memory: dict) -> list[str]:
             budget = (memory.get("logistics") or {}).get("budget") or {}
             if not budget.get("range"):
                 missing.append("budget range")
+                return missing
+            
+            # Check feasibility
+            from app.services.policy.stage_policy import check_budget_feasibility
+            is_feasible, est_cost_str, _ = check_budget_feasibility(memory)
+            if not is_feasible:
+                budget_fixed = budget.get("budgetFixed", False)
+                reqs_fixed = budget.get("requirementsFixed", False)
+                if budget_fixed and not reqs_fixed:
+                    missing.append(
+                        "a confirmation on whether you want to adjust your event list or guest counts, "
+                        "or keep them the same as well"
+                    )
+                elif reqs_fixed and not budget_fixed:
+                    missing.append(
+                        f"a confirmation on whether you want to increase your budget (suggested: {est_cost_str}), "
+                        "or keep it the same as well"
+                    )
+                else:
+                    missing.append(
+                        f"a decision on whether you'd like to increase your budget (suggested: {est_cost_str}) "
+                        "or adjust guest counts, events, or destination"
+                    )
             return missing
         if stage == StageId.S10_VENDORS.value:
             prefs = (memory.get("logistics") or {}).get("vendorPreferences") or {}

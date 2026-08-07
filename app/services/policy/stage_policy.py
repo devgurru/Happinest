@@ -246,8 +246,18 @@ Also extract into earlySignals:
 Extract into validatedPatch.logistics:
 - budget: {
     "range": "27 Million" or "$2.5 Million" or "5 Lakhs" or "AED 500,000",
-    "currency": "PKR" / "INR" / "USD" / "AED" / "EUR" / "GBP" etc.
+    "currency": "PKR" / "INR" / "USD" / "AED" / "EUR" / "GBP" etc.,
+    "userConfirmedOverride": true/false,
+    "budgetFixed": true/false,
+    "requirementsFixed": true/false
   }
+  Confirmation / Override Rules:
+  - If the user explicitly refuses to adjust or increase their budget (e.g. "i am not flexible with my budget", "i cannot increase my budget", "budget is fixed", "cannot increase budget more"):
+    → set validatedPatch.logistics.budget.budgetFixed = true
+  - If the user explicitly refuses to reduce or adjust their events/guests/destination (e.g. "don't want to reduce events", "keep guest count same", "cannot adjust guest count", "don't want to reduce guest count"):
+    → set validatedPatch.logistics.budget.requirementsFixed = true
+  - If the user insists on keeping everything as-is and refuses to adjust either budget or guest count/events (e.g. "this is my final budget", "don't want to change anything", "keep it as is", "no change", "keep guest count as it is", "keep them same", "no changes", "keep everything as is", "don't want to update anything"):
+    → set validatedPatch.logistics.budget.userConfirmedOverride = true
   Currency & Unit Normalization Rules:
   - Default currency is inferred from the wedding country (Pakistan -> PKR, India -> INR, UAE -> AED, USA -> USD, UK -> GBP, Italy/Europe -> EUR, etc.).
   - User EXPLICIT requested currency (e.g. "USD", "$", "AED", "EUR") ALWAYS overrides the country default.
@@ -322,6 +332,137 @@ _SECTION_TO_STAGE: dict[str, str] = {
 # ============================================================================
 # STAGE POLICY CLASS
 # ============================================================================
+
+def format_cost(amount_usd: float, currency: str) -> str:
+    if currency == "INR":
+        amount_inr = amount_usd * 85
+        if amount_inr >= 10000000:
+            return f"{amount_inr / 10000000:.1f} Crore INR"
+        elif amount_inr >= 100000:
+            return f"{amount_inr / 100000:.1f} Lakhs"
+        return f"{amount_inr:,.0f} INR"
+    elif currency == "PKR":
+        amount_pkr = amount_usd * 280
+        if amount_pkr >= 10000000:
+            return f"{amount_pkr / 10000000:.1f} Crore PKR"
+        elif amount_pkr >= 100000:
+            return f"{amount_pkr / 100000:.1f} Lakhs"
+        return f"{amount_pkr:,.0f} PKR"
+    elif currency == "AED":
+        return f"AED {amount_usd * 3.67:,.0f}"
+    elif currency == "GBP":
+        return f"£{amount_usd * 0.78:,.0f}"
+    elif currency == "EUR":
+        return f"€{amount_usd * 0.92:,.0f}"
+    else:
+        # USD
+        if amount_usd >= 1000:
+            return f"${amount_usd / 1000:.0f}k"
+        return f"${amount_usd:,.0f}"
+
+
+def check_budget_feasibility(memory: dict) -> tuple[bool, str, float]:
+    """
+    Evaluates wedding budget feasibility based on place, events, and guest counts.
+    Returns (is_feasible, formatted_estimated_min_budget, estimated_cost_usd).
+    """
+    import re
+    occasion = memory.get("occasion") or {}
+    logistics = memory.get("logistics") or {}
+    
+    place = (occasion.get("place") or occasion.get("locationPreference") or "").strip()
+    events = logistics.get("events") or []
+    guest_counts = logistics.get("guestCounts") or {}
+    
+    # 1. Determine Tier Pricing
+    place_l = place.lower()
+    # High-tier: Europe, USA, premium destinations
+    high_tier_keywords = ["amalfi", "como", "hawaii", "maldives", "paris", "london", 
+                          "new york", "switzerland", "swiss", "italy", "france", 
+                          "usa", "uk", "united kingdom", "santorini", "greece"]
+    
+    # Mid-tier: resort destinations, premium South Asia
+    mid_tier_keywords = ["goa", "phuket", "bali", "tulum", "krabi", "da nang", 
+                         "udaipur", "jaipur", "jodhpur", "dubai", "uae"]
+    
+    cost_per_guest = 50.0  # Default standard/local
+    cost_per_event = 2000.0
+    
+    is_high = any(k in place_l for k in high_tier_keywords)
+    is_mid = any(k in place_l for k in mid_tier_keywords)
+    
+    if is_high:
+        cost_per_guest = 400.0
+        cost_per_event = 8000.0
+    elif is_mid:
+        cost_per_guest = 150.0
+        cost_per_event = 4000.0
+        
+    # 2. Calculate Estimated Minimum Budget in USD
+    total_guests = sum(guest_counts.values()) if isinstance(guest_counts, dict) else 0
+    num_events = len(events)
+    
+    estimated_cost_usd = (total_guests * cost_per_guest) + (num_events * cost_per_event)
+    estimated_cost_usd = max(5000.0, estimated_cost_usd)
+    
+    # 3. Get User Budget
+    budget_obj = logistics.get("budget") or memory.get("earlySignals", {}).get("budget") or {}
+    budget_str = (budget_obj.get("range") or "").strip()
+    currency = (budget_obj.get("currency") or "").strip().upper()
+    
+    if not budget_str:
+        return True, "", 0.0  # No budget to check yet
+        
+    if not currency:
+        # Infer currency from place
+        if any(k in place_l for k in ["delhi", "mumbai", "goa", "udaipur", "jaipur", "jodhpur", "india"]):
+            currency = "INR"
+        elif any(k in place_l for k in ["lahore", "karachi", "islamabad", "bhurban", "hunza", "pakistan"]):
+            currency = "PKR"
+        else:
+            currency = "USD"
+            
+    # Parse User Budget Max Value
+    nums = [float(s) for s in re.findall(r'\d+\.?\d*', budget_str)]
+    if not nums:
+        return True, "", 0.0
+    max_val = max(nums)
+    
+    # Apply multipliers
+    budget_val = budget_str.lower()
+    multiplier = 1.0
+    if "k" in budget_val:
+        multiplier = 1000.0
+    elif "lakh" in budget_val or "lac" in budget_val:
+        multiplier = 100000.0
+    elif "million" in budget_val or "m" in budget_val:
+        multiplier = 1000000.0
+    elif "crore" in budget_val or "cr" in budget_val:
+        multiplier = 10000000.0
+        
+    user_budget_nominal = max_val * multiplier
+    
+    # Convert User Budget to USD for comparison
+    user_budget_usd = user_budget_nominal
+    if currency == "INR":
+        user_budget_usd = user_budget_nominal / 85.0
+    elif currency == "PKR":
+        user_budget_usd = user_budget_nominal / 280.0
+    elif currency == "AED":
+        user_budget_usd = user_budget_nominal / 3.67
+    elif currency == "GBP":
+        user_budget_usd = user_budget_nominal / 0.78
+    elif currency == "EUR":
+        user_budget_usd = user_budget_nominal / 0.92
+        
+    # 4. Compare
+    if user_budget_usd < estimated_cost_usd:
+        # Infeasible! Format estimated cost in user's currency
+        formatted_est = format_cost(estimated_cost_usd, currency)
+        return False, formatted_est, estimated_cost_usd
+        
+    return True, "", estimated_cost_usd
+
 
 class StagePolicy:
     """
@@ -438,7 +579,23 @@ class StagePolicy:
 
         if stage_id == StageId.S9_BUDGET:
             budget = memory.get("logistics", {}).get("budget") or {}
-            return bool((budget.get("range") or budget.get("amount") or "").strip())
+            has_budget = bool((budget.get("range") or budget.get("amount") or "").strip())
+            if not has_budget:
+                return False
+            
+            # Evaluate feasibility
+            is_feasible, _, _ = check_budget_feasibility(memory)
+            if is_feasible:
+                return True
+                
+            # If not feasible, check for overrides or if both budget and requirements are confirmed fixed
+            override = budget.get("userConfirmedOverride", False)
+            budget_fixed = budget.get("budgetFixed", False)
+            reqs_fixed = budget.get("requirementsFixed", False)
+            if override or (budget_fixed and reqs_fixed):
+                return True
+                
+            return False
 
         if stage_id == StageId.S10_VENDORS:
             prefs = memory.get("logistics", {}).get("vendorPreferences") or {}
