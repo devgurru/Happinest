@@ -61,15 +61,29 @@ def is_past_date(date_preference: str) -> bool:
     return False
 
 
+def is_far_future_date(date_preference: str) -> bool:
+    """Return True when date contains a year > 10 years in the future (e.g. 3030, 2099)."""
+    if not date_preference or not isinstance(date_preference, str):
+        return False
+    text = date_preference.strip()
+    year_match = re.search(r"\b(\d{4})\b", text)
+    if year_match:
+        year = int(year_match.group(1))
+        today = _date.today()
+        if year > today.year + 10:
+            return True
+    return False
+
+
 def is_concrete_timing(occasion: dict) -> bool:
-    """True only when date/season is concrete, future, and not vague."""
+    """True only when date/season is concrete, future, and not vague or far-future."""
     date = (occasion.get("datePreference") or "").strip().lower()
     season = (occasion.get("seasonPreference") or "").strip().lower()
 
     if date:
         if any(vague in date for vague in VAGUE_TIMING):
             return False
-        if is_past_date(date):
+        if is_past_date(date) or is_far_future_date(date):
             return False
         if any(m in date for m in MONTHS) or re.search(r"\b20\d{2}\b", date):
             return True
@@ -79,7 +93,7 @@ def is_concrete_timing(occasion: dict) -> bool:
             return False
         has_year = bool(re.search(r"\b20\d{2}\b", season))
         has_month = any(m in season for m in MONTHS)
-        if (has_year or has_month) and not is_past_date(season):
+        if (has_year or has_month) and not is_past_date(season) and not is_far_future_date(season):
             return True
 
     return False
@@ -148,7 +162,7 @@ def resolve_relative_date(date_preference: str) -> str:
 
 
 def sanitize_timing_fields(occasion: dict) -> dict:
-    """Strip vague or past timing values."""
+    """Strip vague, past, or far-future (>10 years) timing values."""
     occ = dict(occasion)
     raw_date = (occ.get("datePreference") or "").strip()
 
@@ -160,7 +174,7 @@ def sanitize_timing_fields(occasion: dict) -> dict:
 
     if date and any(v in date for v in VAGUE_TIMING):
         occ["datePreference"] = ""
-    if occ.get("datePreference") and is_past_date(occ["datePreference"]):
+    if occ.get("datePreference") and (is_past_date(occ["datePreference"]) or is_far_future_date(occ["datePreference"])):
         occ["datePreference"] = ""
     if season and any(v in season for v in VAGUE_TIMING) and not any(s in season for s in VALID_SEASONS):
         occ["seasonPreference"] = ""

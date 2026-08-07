@@ -49,7 +49,7 @@ Extract into validatedPatch.occasion (only fields that are mentioned):
   → "12 June 2028" → "12 June 2028"
   → "next year June" → "June 2027"
   → "this December" → "December 2026"
-  → If resolved date is before July 2026: set validationNotes.isPastDate=true, exclude from patch
+  → If resolved date is before July 2026 OR year > 2036 (more than 10 years out, e.g. "3030", "2099"): exclude from validatedPatch, set validationNotes.isPastDate=true or add to validationNotes.rejectedReasons: ["Date is too far in the future (must be within 10 years)."]
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
 - settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
 - destinationMode: "destination" (away from home) | "local" (same city) | "unknown"
@@ -65,6 +65,7 @@ EARLY SIGNALS CONFIRMATION: If earlySignals already in memory AND user confirms 
 
 Reject (do not include in validatedPatch, add to validationNotes.rejectedReasons):
 - Past dates or years (before July 2026)
+- Far-future dates or years (year > 2036, e.g. "3030", "2099")
 - Gibberish / random noise""",
     },
 
@@ -191,11 +192,12 @@ Extract into validatedPatch.logistics:
     "requirementsFixed": true/false
   }
   Confirmation / Override Rules:
-  - If the user explicitly refuses to adjust or increase their budget (e.g. "i am not flexible with my budget", "i cannot increase my budget", "budget is fixed", "cannot increase budget more"):
-    → set validatedPatch.logistics.budget.budgetFixed = true
-  - If the user explicitly refuses to reduce or adjust their events/guests/destination (e.g. "don't want to reduce events", "keep guest count same", "cannot adjust guest count", "don't want to reduce guest count"):
+  - If the user says their BUDGET is fixed (e.g. "no that's my final budget", "this is my budget", "budget is fixed", "cannot increase budget"):
+    → set validatedPatch.logistics.budget.budgetFixed = true (do NOT set userConfirmedOverride = true unless they ALSO confirm keeping guests/events fixed!)
+  - If the user says their REQUIREMENTS (guests/events/destination) are fixed (e.g. "don't want to change guest count", "keep guest count same", "cannot adjust guest count"):
     → set validatedPatch.logistics.budget.requirementsFixed = true
-  - If the user insists on keeping everything as-is and refuses to adjust either budget or guest count/events (e.g. "this is my final budget", "don't want to change anything", "keep it as is", "no change", "keep guest count as it is", "keep them same", "no changes", "keep everything as is", "don't want to update anything"):
+  - If the user explicitly confirms keeping EVERYTHING fixed (e.g. "keep everything as is", "don't want to change anything", "no changes at all"):
+    → set validatedPatch.logistics.budget.requirementsFixed = true
     → set validatedPatch.logistics.budget.userConfirmedOverride = true
   Currency & Unit Normalization Rules:
   - Default currency is inferred from the wedding country (Pakistan -> PKR, India -> INR, UAE -> AED, USA -> USD, UK -> GBP, Italy/Europe -> EUR, etc.).

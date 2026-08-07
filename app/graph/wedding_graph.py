@@ -276,7 +276,15 @@ async def process_conversation_turn(
     if stage in (StageId.S8_GUESTS.value, StageId.S9_BUDGET.value) or is_s8_advancing:
         is_feasible, est_cost_str, _ = check_budget_feasibility(memory)
         if not is_feasible and est_cost_str:
-            budget_feasibility = f"INFEASIBLE — suggested minimum: {est_cost_str}. User must increase budget or adjust requirements."
+            place = (memory.get("occasion") or {}).get("place") or "selected location"
+            events = (memory.get("logistics") or {}).get("events") or []
+            counts = (memory.get("logistics") or {}).get("guestCounts") or {}
+            total_guests = sum(counts.values()) if isinstance(counts, dict) else 0
+            budget_feasibility = (
+                f"INFEASIBLE — Destination: {place}, Events: {len(events)}, Total Guests: {total_guests}. "
+                f"Suggested realistic minimum budget: {est_cost_str}. "
+                "Explain to the user why their current budget is not feasible using these specific numbers, and ask if they want to increase budget or adjust guest count/events/destination."
+            )
         elif is_feasible:
             budget_feasibility = "Budget is feasible for the selected destination, events, and guest counts."
 
