@@ -246,18 +246,22 @@ async def execute_synthesis(
     ))
     await db.flush()
 
-    if synthesis_type == SynthesisType.BRIEF.value:
-        final_decision_type = StageDecisionType.STAY.value
-        final_stage = StageId.S5_BRIEF.value
-    else:
-        final_decision_type = StageDecisionType.STAY.value
-        final_stage = stage
+    if save_planner_message:
+        if synthesis_type == SynthesisType.BRIEF.value:
+            final_decision_type = StageDecisionType.STAY.value
+            final_stage = StageId.S5_BRIEF.value
+        else:
+            final_decision_type = StageDecisionType.STAY.value
+            final_stage = stage
 
-    if final_stage != session.current_stage:
-        await SessionService.update_stage(
-            db, session, new_stage=final_stage,
-            decision_type=final_decision_type, request_id=request_id,
-        )
+        if final_stage != session.current_stage:
+            await SessionService.update_stage(
+                db, session, new_stage=final_stage,
+                decision_type=final_decision_type, request_id=request_id,
+            )
+    else:
+        final_stage = stage
+        final_decision_type = StageDecisionType.STAY.value
 
     suggestions: list = []
     if final_stage == StageId.S7_EVENTS.value:
