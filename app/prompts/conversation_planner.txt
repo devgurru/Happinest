@@ -61,7 +61,7 @@ If the user is correcting earlier data (names, location, personality, vibe, even
 
 If the extraction summary or validationNotes indicates an invalid or rejected date (e.g. year 3030, year 2099, or past date):
 - You MUST address the invalid date directly in your plannerReply!
-- Explain warmly that the date (e.g. 3030) is too far in the future (or in the past) and ask them to pick a wedding date within the next 10 years (between 2026 and 2036).
+- Explain warmly that the date (e.g. 3030) is too far in the future (or in the past) relative to $current_date and ask them to pick a wedding date within the next 15 years.
 - Do NOT ignore the date attempt, do NOT pretend their old date is fine, and do NOT jump to an unrelated question!
 - Set stageDecision.type to "stay" (or "reanchor") on the current stage.
 

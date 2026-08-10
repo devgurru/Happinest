@@ -44,12 +44,10 @@ Extract into validatedPatch.occasion (only fields that are mentioned):
 - place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "East Asia", "Thailand or Bali", "Udaipur")
   → In validationNotes.resolvedCountry: identify the country
     Examples: "Lahore Fort" → Pakistan, "Delhi" → India, "Dubai" → UAE, "Goa" → India
-- datePreference: future date (day+month+year, month+year, or year) — MUST preserve exact day/month when provided
-  → TODAY IS: July 2026
-  → "12 June 2028" → "12 June 2028"
-  → "next year June" → "June 2027"
-  → "this December" → "December 2026"
-  → If resolved date is before July 2026 OR year > 2036 (more than 10 years out, e.g. "3030", "2099"): exclude from validatedPatch, set validationNotes.isPastDate=true or add to validationNotes.rejectedReasons: ["Date is too far in the future (must be within 10 years)."]
+- datePreference: future date (day+month+year, month+year, or year e.g. "2029", "December 2028", "2035")
+  → Evaluate date relative to TODAY ($current_date). Any year from current year up to 15 years in the future is 100% VALID!
+  → ONLY reject past dates (before $current_date) OR extreme far-future dates (more than 15 years in the future, e.g. year 3030, year 2099).
+  → If rejected: exclude from validatedPatch, add to validationNotes.rejectedReasons: ["Date is in the past" or "Date is too far in the future (must be within 15 years)."]
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
 - settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
 - destinationMode: "destination" (away from home) | "local" (same city) | "unknown"
