@@ -251,15 +251,6 @@ async def process_conversation_turn(
             memory = new_mem.memory_json
             version_no = new_mem.version_no
 
-    # Seed tentative guest counts if entering S8
-    if stage == StageId.S8_GUESTS.value:
-        memory_seeded = seed_tentative_guest_counts(memory)
-        if memory_seeded != memory:
-            new_mem = await MemoryService.apply_patch(
-                db, session, {"logistics": memory_seeded.get("logistics") or {}}, request_id=request_id
-            )
-            memory = new_mem.memory_json
-            version_no = new_mem.version_no
 
     # S4 vibe sync
     if stage == StageId.S4_VIBE.value:

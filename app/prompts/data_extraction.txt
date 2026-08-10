@@ -49,7 +49,11 @@ $stage_extraction_rules
    → set metaIntent = "correction"
    → set correctedSection = the target section (e.g. "personality", "vibe", "logistics")
    → validatedPatch.[section] MUST contain the complete list of REMAINING items with the requested item REMOVED.
-8. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
+8. COMBINE EVENTS RULE: When user asks to combine/merge two events on the same day (e.g. "have wedding ceremony and reception on same day", "combine mehndi and haldi"):
+   → set metaIntent = "correction", correctedSection = "logistics"
+   → In validatedPatch.logistics.events: replace the two individual events with a single combined event using "/" (e.g. "Wedding Ceremony/Reception", "Mehndi/Haldi")
+   → The complete list must have the combined event and all other unchanged events.
+9. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
 
 
 ## metaIntent — classify into exactly one:

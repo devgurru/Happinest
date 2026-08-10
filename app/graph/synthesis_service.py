@@ -32,15 +32,8 @@ from app.services.ui.ui_hints import build_ui_suggestions
 
 
 def seed_tentative_guest_counts(memory: dict) -> dict:
-    """Generate realistic tentative guest counts for confirmed events if not already present."""
-    if not isinstance(memory, dict):
-        return memory
-    logistics = dict(memory.get("logistics") or {})
-    events = logistics.get("events") or []
-    if not events:
-        return memory
-
-    counts = dict(logistics.get("guestCounts") or {})
+    """Return memory unchanged — guest counts must be explicitly provided by the user."""
+    return memory
     pref_str = str((memory.get("occasion") or {}).get("guestCountPreference") or "")
     match = re.search(r'\b(\d+)\b', pref_str)
     base_count = int(match.group(1)) if match else None
