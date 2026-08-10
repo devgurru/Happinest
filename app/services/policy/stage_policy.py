@@ -34,9 +34,9 @@ IMPORTANT: Even if metaIntent is "correction" (e.g. correcting names), STILL ext
 
 SPECIFICITY LEVEL (output validationNotes.specificityLevel):
 - L0: Junk / unusable (e.g. "kgjhgjkh ghjghj", "123123") → set metaIntent = "gibberish"
-- IL1: Broad setting/timing (e.g. "beach destination in winter of 26", "royal palace wedding sometime next year")
-- IL1_FLEXIBLE: Flexible consent / non-committal (e.g. "nothing finalized", "not sure", "keep it flexible", "decide later")
-  → set validatedPatch.occasion.specificityLevel = "IL1_FLEXIBLE"
+- IL1: Broad setting/timing without a specific place (e.g. "somewhere in beach", "beach wedding in dec", "royal palace wedding sometime next year")
+- IL1_FLEXIBLE: Flexible consent / non-committal phrases ONLY (e.g. "nothing finalized", "not sure", "keep it flexible", "decide later")
+  → set validatedPatch.occasion.specificityLevel = "IL1_FLEXIBLE" ONLY when explicit flexible phrases are used.
 - IL2: Refined region & month (e.g. "East Asia in Dec 26", "Thailand or Bali in December 2026", "Rajasthan palace in Feb 2026")
 - IL3: Exact city & dates (e.g. "Goa, Dec 18-20 2026", "Udaipur, Feb 12-14 2026", "Phuket first week of December 2026")
 

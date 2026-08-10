@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.enums import EventType
+from app.domain.enums import EventType, StageId
 from app.services.ai.ai_gateway import AIGatewayError, call_llm
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ class ExtractionResult:
             validated_patch["logistics"] = logistics
 
         # Sanitize patch against canonical schema
-        validated_patch = _sanitize_extracted_patch(validated_patch)
+        validated_patch = _sanitize_extracted_patch(validated_patch, stage=stage)
         validated_patch = _remove_empty(validated_patch)
 
         corrected_section = raw.get("correctedSection")
@@ -156,7 +156,7 @@ def _normalise_events(raw: Any) -> list[str]:
     return list(dict.fromkeys(normalised))
 
 
-def _sanitize_extracted_patch(patch: dict) -> dict:
+def _sanitize_extracted_patch(patch: dict, stage: str | None = None) -> dict:
     """
     Sanitize AI Call 1 patch against canonical memory schema.
     Prevents database pollution by filtering unknown keys and relocating misplaced fields.
@@ -183,18 +183,20 @@ def _sanitize_extracted_patch(patch: dict) -> dict:
         "summary": {"status", "text", "version", "generatedFromMemoryVersion"}
     }
 
-    # Move misplaced logistics keys from occasion
+    # Move misplaced logistics / early signal keys from occasion
     occasion = patch.get("occasion")
     if isinstance(occasion, dict):
-        logistics = patch.setdefault("logistics", {})
-        if not isinstance(logistics, dict):
-            logistics = {}
-            patch["logistics"] = logistics
         for key in ("events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"):
             if key in occasion:
                 val = occasion.pop(key)
-                if key not in logistics:
-                    logistics[key] = val
+                if key == "budget" and stage != StageId.S9_BUDGET.value:
+                    es = patch.setdefault("earlySignals", {})
+                    if isinstance(es, dict) and not es.get("budget"):
+                        es["budget"] = val
+                else:
+                    logistics = patch.setdefault("logistics", {})
+                    if isinstance(logistics, dict) and key not in logistics:
+                        logistics[key] = val
 
     sanitized = {}
     for sec, val in patch.items():

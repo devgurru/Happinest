@@ -213,7 +213,17 @@ class MemoryService:
         # Fold legacy top-level occasion fields into occasion.{...}
         from app.utils.validators import get_occasion_state
         occ_state = get_occasion_state(new_memory)
-        new_memory["occasion"] = occ_state["occasion"]
+        new_occ = occ_state["occasion"]
+        valid_occ_keys = {
+            "place", "locationPreference", "settingPreference",
+            "datePreference", "seasonPreference", "destinationMode",
+            "specificityLevel", "country"
+        }
+        for k in list(new_occ.keys()):
+            if k not in valid_occ_keys:
+                new_occ.pop(k, None)
+        new_memory["occasion"] = new_occ
+
         for legacy_key in (
             "place", "datePreference", "seasonPreference",
             "locationPreference", "settingPreference", "destinationMode",

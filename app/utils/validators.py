@@ -65,7 +65,7 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
 
     combined_text = f"{place} {setting} {date_pref} {season_pref} {msg_l}".lower()
 
-    if any(phrase in combined_text for phrase in S2_FLEXIBLE_PHRASES) or spec_level == "IL1_FLEXIBLE":
+    if any(phrase in combined_text for phrase in S2_FLEXIBLE_PHRASES):
         return "IL1_FLEXIBLE"
 
     has_specific_place = bool(place)
@@ -73,12 +73,6 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
     has_timing = bool(date_pref or season_pref)
 
     if not has_specific_place and not has_setting and not has_timing:
-        has_identity_patch = bool(
-            isinstance(memory_or_patch.get("identity"), dict)
-            and (memory_or_patch["identity"].get("groomName") or memory_or_patch["identity"].get("brideName"))
-        )
-        if has_identity_patch:
-            return "IL1_FLEXIBLE"
         return "L0"
 
     # Specific place + timing -> IL3 (exact) or IL2 (region)
