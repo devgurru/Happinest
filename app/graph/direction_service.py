@@ -16,7 +16,6 @@ from app.domain.enums import (
     ArtifactStatus, ArtifactType, EventType, MessageRole, MessageType,
     ResponseSource, StageDecisionType, StageId,
 )
-from app.domain.memory_schema import build_selected_chips
 from app.graph.response_builder import make_error_response, response_dict
 from app.models.event_site import EventSite
 from app.models.generated_artifact import GeneratedArtifact
@@ -143,7 +142,6 @@ async def execute_direction_from_embeddings(
     if not mem_version:
         raise ValueError(f"No memory for session {session_id}")
     memory = mem_version.memory_json
-    version_no = mem_version.version_no
 
     try:
         candidates = await find_matching_event_sites(db, memory, top_k=30)
@@ -195,7 +193,6 @@ async def execute_direction_from_embeddings(
         planner_reply = f"Here are alternative design direction concepts for your celebration in {place}:"
     else:
         planner_reply = build_direction_planner_reply(options, place)
-    telemetry: dict = {}
 
     patch = {
         "direction": {

@@ -32,6 +32,11 @@ $stage_extraction_rules
 1. Only extract NEW information not already confirmed in memory above.
 2. Apply stage-specific validation rules DURING extraction (e.g. reject past dates).
 3. Capture any OTHER stage data (personality, vibe, events, budget, vendors, guestCount) into earlySignals.
+   * BUDGET EXTRACTION: Always extract earlySignals.budget as: { "range": "...", "currency": "..." }
+     - "currency": infer the currency code (e.g. "USD" for "$", "INR" for Indian rupees/lakhs, "PKR" for Pakistani rupees/lakhs, "GBP" for "£", "EUR" for "€"). Default to USD if "$" is present or if global terms are used. Never convert dollar values (like "$25-30") to Lakhs.
+     - "range": preserve the numbers and units, but normalize implied units for raw numbers:
+       * If currency is USD/GBP/EUR/AED and numbers are double digits under 100 (e.g. "25-30" or "$25-30"): assume thousands (K) and normalize to "$25k-$30k" (or similar K-based ranges). Never leave it as literally "25-30" which means 25 dollars.
+       * If currency is INR/PKR and numbers are double digits under 100 (e.g. "25-30"): assume Lakhs and normalize to "2.5-3.0 Million".
 4. EARLY SIGNALS CONFIRMATION: If earlySignals has values in memory AND user confirms them
    (says "yes" / "keep those" / "go with it" / "that's right" / "use those" / "sounds good" / "perfect")
    → extract earlySignals values INTO validatedPatch for this stage's canonical field.
@@ -44,7 +49,11 @@ $stage_extraction_rules
    → set metaIntent = "correction"
    → set correctedSection = the target section (e.g. "personality", "vibe", "logistics")
    → validatedPatch.[section] MUST contain the complete list of REMAINING items with the requested item REMOVED.
-8. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
+8. COMBINE EVENTS RULE: When user asks to combine/merge two events on the same day (e.g. "have wedding ceremony and reception on same day", "combine mehndi and haldi"):
+   → set metaIntent = "correction", correctedSection = "logistics"
+   → In validatedPatch.logistics.events: replace the two individual events with a single combined event using "/" (e.g. "Wedding Ceremony/Reception", "Mehndi/Haldi")
+   → The complete list must have the combined event and all other unchanged events.
+9. If validatedPatch would be empty, check carefully — a confirmation of earlySignals IS new data.
 
 
 ## metaIntent — classify into exactly one:

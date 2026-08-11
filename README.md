@@ -17,7 +17,7 @@ FastAPI + PostgreSQL + Ollama AI-powered wedding planning consultant.
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env  #update api keys accordingly 
 alembic upgrade head
 python -m app.seeds.seed_runner
 ```

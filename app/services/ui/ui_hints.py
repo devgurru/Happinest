@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from app.domain.chip_pools import CHIP_POOLS, get_chip_pool
+from app.domain.chip_pools import get_chip_pool
 from app.domain.enums import StageId
 
 CHIP_STAGES = {

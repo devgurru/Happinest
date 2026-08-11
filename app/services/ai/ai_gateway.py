@@ -2,9 +2,9 @@
 AI Gateway — multi-provider chat adapter.
 
 Providers (switch via LLM_PROVIDER in .env):
-  - ollama → local Ollama / Gemma chat
   - grok   → xAI Grok (api.x.ai) — keys usually look like xai-...
   - groq   → Groq cloud (api.groq.com) — keys usually look like gsk_...
+  - openai → OpenAI (api.openai.com)
 
 Callers always use call_llm(...). Provider-specific details stay inside this module.
 No fallback fabricated replies — raises AIGatewayError on failure.
@@ -111,39 +111,6 @@ def _openai_compatible_error_message(resp: httpx.Response, label: str) -> str:
         return f"{label} HTTP {resp.status_code}: {detail}"
     except Exception:
         return f"{label} HTTP {resp.status_code}: {body}"
-
-
-async def _call_ollama(messages: list[dict], telemetry: dict) -> dict:
-    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
-    payload = {
-        "model": settings.OLLAMA_MODEL,
-        "messages": messages,
-        "stream": False,
-        "options": {
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "num_predict": 2500,
-            "stop": [],
-        },
-    }
-
-    async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-        resp = await client.post(url, json=payload)
-
-    telemetry["http_status"] = resp.status_code
-    if resp.status_code != 200:
-        raise AIGatewayError(
-            code="OLLAMA_HTTP_ERROR",
-            message=f"Ollama returned HTTP {resp.status_code}: {resp.text[:300]}",
-            http_status=resp.status_code,
-        )
-
-    data = resp.json()
-    raw_text: str = data.get("message", {}).get("content", "")
-    raw_text = _normalize_raw_text(raw_text)
-    telemetry["input_tokens"] = data.get("prompt_eval_count")
-    telemetry["output_tokens"] = data.get("eval_count")
-    return _extract_json(raw_text)
 
 
 async def _call_openai_compatible(
@@ -273,10 +240,8 @@ async def call_llm(
                 parsed = await _call_grok(messages, telemetry)
             elif provider == "groq":
                 parsed = await _call_groq(messages, telemetry)
-            elif provider == "openai":
-                parsed = await _call_openai(messages, telemetry)
             else:
-                parsed = await _call_ollama(messages, telemetry)
+                parsed = await _call_openai(messages, telemetry)
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
             return parsed, telemetry
 
@@ -291,7 +256,7 @@ async def call_llm(
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
-            prefix = {"grok": "GROK", "groq": "GROQ", "openai": "OPENAI"}.get(provider, "OLLAMA")
+            prefix = {"grok": "GROK", "groq": "GROQ"}.get(provider, "OPENAI")
             last_error = AIGatewayError(
                 code=f"{prefix}_TIMEOUT" if isinstance(e, httpx.TimeoutException) else f"{prefix}_CONNECT_ERROR",
                 message=str(e),
@@ -302,7 +267,7 @@ async def call_llm(
         except (json.JSONDecodeError, ValueError) as e:
             telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
             print(f"[AI_GATEWAY] JSON parse failed on attempt {attempt + 1} ({provider}/{model}): {e}")
-            prefix = {"grok": "GROK", "groq": "GROQ", "openai": "OPENAI"}.get(provider, "OLLAMA")
+            prefix = {"grok": "GROK", "groq": "GROQ"}.get(provider, "OPENAI")
             last_error = AIGatewayError(
                 code=f"{prefix}_JSON_PARSE_ERROR",
                 message=f"Failed to parse JSON from LLM response: {e}",
@@ -388,93 +353,57 @@ async def call_vision_llm(
 
     messages = [{"role": "user", "content": content_parts}]
 
-    if provider in ("grok", "groq", "openai"):
-        if provider == "groq":
-            api_key = settings.GROQ_API_KEY
-            base_url = settings.GROQ_BASE_URL
-            error_prefix = "GROQ_VISION"
-            label = "Groq Vision"
-        elif provider == "grok":
-            api_key = settings.GROK_API_KEY
-            base_url = settings.GROK_BASE_URL
-            error_prefix = "GROK_VISION"
-            label = "Grok Vision"
-        else:  # openai
-            api_key = settings.OPENAI_API_KEY
-            base_url = settings.OPENAI_BASE_URL
-            error_prefix = "OPENAI_VISION"
-            label = "OpenAI Vision"
-        t0 = time.monotonic()
-        try:
-            if not api_key.strip():
-                raise AIGatewayError(code=f"{error_prefix}_MISSING_KEY", message="Missing API key")
-            url = f"{base_url.rstrip('/')}/chat/completions"
-            headers = {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
-            payload = {"model": model, "messages": messages, "temperature": 0.3, "stream": False}
+    if provider == "groq":
+        api_key = settings.GROQ_API_KEY
+        base_url = settings.GROQ_BASE_URL
+        error_prefix = "GROQ_VISION"
+        label = "Groq Vision"
+    elif provider == "grok":
+        api_key = settings.GROK_API_KEY
+        base_url = settings.GROK_BASE_URL
+        error_prefix = "GROK_VISION"
+        label = "Grok Vision"
+    else:  # openai
+        api_key = settings.OPENAI_API_KEY
+        base_url = settings.OPENAI_BASE_URL
+        error_prefix = "OPENAI_VISION"
+        label = "OpenAI Vision"
 
-            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                resp = await client.post(url, headers=headers, json=payload)
+    t0 = time.monotonic()
+    try:
+        if not api_key.strip():
+            raise AIGatewayError(code=f"{error_prefix}_MISSING_KEY", message="Missing API key")
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
+        payload = {"model": model, "messages": messages, "temperature": 0.3, "stream": False}
 
-            telemetry["http_status"] = resp.status_code
-            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            resp = await client.post(url, headers=headers, json=payload)
 
-            if resp.status_code != 200:
-                raise AIGatewayError(
-                    code=f"{error_prefix}_HTTP_ERROR",
-                    message=_openai_compatible_error_message(resp, label),
-                    http_status=resp.status_code,
-                )
+        telemetry["http_status"] = resp.status_code
+        telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
 
-            data = resp.json()
-            choices = data.get("choices") or []
-            if not choices:
-                raise AIGatewayError(code=f"{error_prefix}_EMPTY", message="Empty choices")
-
-            raw_text = (choices[0].get("message") or {}).get("content") or ""
-            parsed = _parse_vision_response(raw_text)
-            return parsed, telemetry
-
-        except Exception as e:
-            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
-            if isinstance(e, AIGatewayError):
-                raise
+        if resp.status_code != 200:
             raise AIGatewayError(
-                code=f"{error_prefix}_FAILED",
-                message=str(e),
-            ) from e
+                code=f"{error_prefix}_HTTP_ERROR",
+                message=_openai_compatible_error_message(resp, label),
+                http_status=resp.status_code,
+            )
 
-    else:
-        # Ollama — attempt multimodal; fall back gracefully if model doesn't support it
-        t0 = time.monotonic()
-        url = f"{settings.OLLAMA_BASE_URL}/api/chat"
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 1500},
-        }
-        try:
-            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                resp = await client.post(url, json=payload)
-            telemetry["http_status"] = resp.status_code
-            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
-            if resp.status_code != 200:
-                raise AIGatewayError(
-                    code="OLLAMA_VISION_HTTP_ERROR",
-                    message=f"Ollama vision returned HTTP {resp.status_code}: {resp.text[:300]}",
-                    http_status=resp.status_code,
-                )
-            data = resp.json()
-            raw_text = data.get("message", {}).get("content", "")
-            raw_text = _normalize_raw_text(raw_text)
-            telemetry["input_tokens"] = data.get("prompt_eval_count")
-            telemetry["output_tokens"] = data.get("eval_count")
-            return _extract_json(raw_text), telemetry
-        except AIGatewayError:
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise AIGatewayError(code=f"{error_prefix}_EMPTY", message="Empty choices")
+
+        raw_text = (choices[0].get("message") or {}).get("content") or ""
+        parsed = _parse_vision_response(raw_text)
+        return parsed, telemetry
+
+    except Exception as e:
+        telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
+        if isinstance(e, AIGatewayError):
             raise
-        except Exception as e:
-            telemetry["latency_ms"] = int((time.monotonic() - t0) * 1000)
-            raise AIGatewayError(
-                code="OLLAMA_VISION_FAILED",
-                message=str(e),
-            ) from e
+        raise AIGatewayError(
+            code=f"{error_prefix}_FAILED",
+            message=str(e),
+        ) from e

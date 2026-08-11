@@ -17,7 +17,7 @@ from app.domain.enums import (
     ArtifactStatus, ArtifactType, EventType, MessageRole, MessageType,
     ResponseSource, StageDecisionType, StageId, SynthesisType,
 )
-from app.domain.memory_schema import build_selected_chips, resolve_primary_vibe
+from app.domain.memory_schema import resolve_primary_vibe
 from app.graph.direction_service import execute_direction_from_embeddings
 from app.graph.response_builder import make_error_response, response_dict
 from app.models.generated_artifact import GeneratedArtifact
@@ -32,15 +32,8 @@ from app.services.ui.ui_hints import build_ui_suggestions
 
 
 def seed_tentative_guest_counts(memory: dict) -> dict:
-    """Generate realistic tentative guest counts for confirmed events if not already present."""
-    if not isinstance(memory, dict):
-        return memory
-    logistics = dict(memory.get("logistics") or {})
-    events = logistics.get("events") or []
-    if not events:
-        return memory
-
-    counts = dict(logistics.get("guestCounts") or {})
+    """Return memory unchanged — guest counts must be explicitly provided by the user."""
+    return memory
     pref_str = str((memory.get("occasion") or {}).get("guestCountPreference") or "")
     match = re.search(r'\b(\d+)\b', pref_str)
     base_count = int(match.group(1)) if match else None
@@ -124,7 +117,7 @@ def summarize_correction_for_reply(
             if b_primary and b_primary != a_primary:
                 parts.append(f"vibe updated to {a_primary or 'unset'}")
             elif b_sec and b_sec != a_sec:
-                parts.append(f"vibe notes updated")
+                parts.append("vibe notes updated")
         elif section == "occasion":
             b = memory_before.get("occasion") or {}
             a = memory_after.get("occasion") or {}
@@ -253,18 +246,22 @@ async def execute_synthesis(
     ))
     await db.flush()
 
-    if synthesis_type == SynthesisType.BRIEF.value:
-        final_decision_type = StageDecisionType.STAY.value
-        final_stage = StageId.S5_BRIEF.value
-    else:
-        final_decision_type = StageDecisionType.STAY.value
-        final_stage = stage
+    if save_planner_message:
+        if synthesis_type == SynthesisType.BRIEF.value:
+            final_decision_type = StageDecisionType.STAY.value
+            final_stage = StageId.S5_BRIEF.value
+        else:
+            final_decision_type = StageDecisionType.STAY.value
+            final_stage = stage
 
-    if final_stage != session.current_stage:
-        await SessionService.update_stage(
-            db, session, new_stage=final_stage,
-            decision_type=final_decision_type, request_id=request_id,
-        )
+        if final_stage != session.current_stage:
+            await SessionService.update_stage(
+                db, session, new_stage=final_stage,
+                decision_type=final_decision_type, request_id=request_id,
+            )
+    else:
+        final_stage = stage
+        final_decision_type = StageDecisionType.STAY.value
 
     suggestions: list = []
     if final_stage == StageId.S7_EVENTS.value:

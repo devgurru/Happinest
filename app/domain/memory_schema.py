@@ -296,11 +296,25 @@ def build_planner_notes_view(memory: dict) -> dict:
 
     plan_parts = []
     if events:
-        plan_parts.append(f"{len(events)} events")
-    total_guests = sum(guest_counts.values()) if isinstance(guest_counts, dict) else 0
-    if total_guests:
-        plan_parts.append(f"~{total_guests:,} guests")
-    budget_range = budget.get("range", "")
+        event_details = []
+        for ev in events:
+            cnt = guest_counts.get(ev) if isinstance(guest_counts, dict) else None
+            if cnt is not None and str(cnt).strip() != "":
+                event_details.append(f"{ev}: {cnt}")
+            else:
+                event_details.append(ev)
+        if event_details:
+            plan_parts.append(", ".join(event_details))
+    elif isinstance(guest_counts, dict) and guest_counts:
+        event_details = [
+            f"{ev}: {cnt}"
+            for ev, cnt in guest_counts.items()
+            if cnt is not None and str(cnt).strip() != ""
+        ]
+        if event_details:
+            plan_parts.append(", ".join(event_details))
+
+    budget_range = budget.get("range", "") if isinstance(budget, dict) else ""
     if budget_range:
         plan_parts.append(budget_range)
 

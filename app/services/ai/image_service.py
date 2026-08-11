@@ -209,13 +209,6 @@ def _build_memory_patch(result: dict, new_image_count: int, existing_vs: dict) -
 
     # --- Merge list-based earlySignals (vibe, personality, events) ---
     early = (patch.get("earlySignals") or {})
-    existing_early = {}
-    try:
-        from app.domain.memory_schema import fresh_memory
-        # We only need existing earlySignals non-visual fields
-        existing_early = {}
-    except Exception:
-        pass
 
     vibe_hints = _safe_list(result.get("vibeHints"), max_items=3)
     if vibe_hints:
@@ -256,7 +249,6 @@ def _build_planner_note(result: dict, existing_vs: dict, is_repeat: bool) -> str
     # Repeat upload — reference old context and ask what's different
     old_colors  = _safe_list(existing_vs.get("colorPalette"))
     old_venue   = _safe_str(existing_vs.get("venueType"))
-    old_style   = _safe_list(existing_vs.get("styleKeywords"))
     new_colors  = _safe_list(vs_raw.get("colorPalette"), max_items=5)
     new_venue   = _safe_str(vs_raw.get("venueType"))
 
@@ -284,8 +276,8 @@ def _build_planner_note(result: dict, existing_vs: dict, is_repeat: bool) -> str
         )
     else:
         return (
-            f"You've shared more images! I've merged these with your earlier uploads. "
-            f"Are these showing the same vision, or something different you'd like to explore?"
+            "You've shared more images! I've merged these with your earlier uploads. "
+            "Are these showing the same vision, or something different you'd like to explore?"
         )
 
 

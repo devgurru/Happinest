@@ -1,5 +1,4 @@
 """Pydantic schemas for all API request/response shapes."""
-import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field

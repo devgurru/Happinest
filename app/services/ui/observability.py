@@ -1,6 +1,5 @@
 """Observability — logs every AI turn to ai_turn_logs table."""
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

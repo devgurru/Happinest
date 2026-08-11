@@ -7,7 +7,6 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.domain.enums import StaleSectionId
 from app.domain.memory_schema import update_committed_selections
@@ -186,16 +185,39 @@ class MemoryService:
                     if "committedSelections" in new_memory and isinstance(new_memory["committedSelections"], dict):
                         new_memory["committedSelections"]["events"] = list(new_events)
 
-        # Synchronize and prune guestCounts & vendorPreferences when logistics.events exists in memory
+        # Synchronize and prune events, guestCounts & vendorPreferences when logistics.events exists in memory
         if "logistics" in new_memory and isinstance(new_memory["logistics"], dict):
             logistics = new_memory["logistics"]
             events_list = logistics.get("events") or []
             if isinstance(events_list, list) and events_list:
+                # 0. Clean out individual constituent events if a combined event (with '/') exists
+                combined_events = [e for e in events_list if isinstance(e, str) and "/" in e]
+                if combined_events:
+                    constituent_lower = set()
+                    for cb in combined_events:
+                        for part in cb.split("/"):
+                            if part.strip():
+                                constituent_lower.add(part.strip().lower())
+
+                    events_list = [
+                        e for e in events_list
+                        if not (isinstance(e, str) and "/" not in e and e.strip().lower() in constituent_lower)
+                    ]
+                    logistics["events"] = events_list
+
                 valid_event_set = {str(e).strip().lower() for e in events_list if isinstance(e, str)}
 
-                # 1. Prune guestCounts for deleted events
+                # 1. Carry constituent counts to combined events (e.g. "Wedding Ceremony/Reception")
                 counts = logistics.get("guestCounts")
                 if isinstance(counts, dict):
+                    for ev in events_list:
+                        if isinstance(ev, str) and "/" in ev and ev not in counts:
+                            parts = {p.strip().lower() for p in ev.split("/") if p.strip()}
+                            part_counts = [int(counts[k]) for k in list(counts) if k.lower() in parts and isinstance(counts[k], (int, float)) and counts[k] > 0]
+                            if part_counts:
+                                counts[ev] = max(part_counts)
+
+                    # Prune guestCounts for events no longer in the list
                     logistics["guestCounts"] = {
                         ev: cnt for ev, cnt in counts.items()
                         if str(ev).strip().lower() in valid_event_set
@@ -214,7 +236,17 @@ class MemoryService:
         # Fold legacy top-level occasion fields into occasion.{...}
         from app.utils.validators import get_occasion_state
         occ_state = get_occasion_state(new_memory)
-        new_memory["occasion"] = occ_state["occasion"]
+        new_occ = occ_state["occasion"]
+        valid_occ_keys = {
+            "place", "locationPreference", "settingPreference",
+            "datePreference", "seasonPreference", "destinationMode",
+            "specificityLevel", "country"
+        }
+        for k in list(new_occ.keys()):
+            if k not in valid_occ_keys:
+                new_occ.pop(k, None)
+        new_memory["occasion"] = new_occ
+
         for legacy_key in (
             "place", "datePreference", "seasonPreference",
             "locationPreference", "settingPreference", "destinationMode",
