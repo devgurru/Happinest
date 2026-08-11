@@ -39,6 +39,8 @@ S2_FLEXIBLE_PHRASES = (
     "nothing finalized", "not sure", "keep it flexible", "keep it broad",
     "decide later", "help me finalize later", "flexible", "skip", "no preference",
     "not decided", "to be decided", "undecided", "later", "anywhere",
+    "somewhere in", "somewhere", "anywhere in", "any location", "open to suggestions",
+    "open to ideas", "open to anything",
 )
 
 
@@ -63,6 +65,9 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
     season_pref = (occ.get("seasonPreference") or "").strip()
     spec_level = (occ.get("specificityLevel") or "").strip().upper()
 
+    if spec_level in ("IL1_FLEXIBLE", "IL2", "IL3"):
+        return spec_level
+
     combined_text = f"{place} {setting} {date_pref} {season_pref} {msg_l}".lower()
 
     if any(phrase in combined_text for phrase in S2_FLEXIBLE_PHRASES):
@@ -83,7 +88,7 @@ def classify_s2_info_level(memory_or_patch: dict, user_message: str = "") -> str
             return "IL3"
         return "IL2"
 
-    # Setting only (e.g. "beach") or timing only (e.g. "December 2026") WITHOUT a specific place -> IL1
+    # Setting only (e.g. "beach", "mountains") or timing only WITHOUT a specific place -> IL1
     return "IL1"
 
 
@@ -95,13 +100,15 @@ def get_occasion_state(memory: dict, user_message: str = "") -> dict:
     - IL1: stay on S2 once (ask for region/place or flexible consent)
     - IL1_FLEXIBLE, IL2, IL3: advance to S3!
     """
-    occ = sanitize_timing_fields(dict(memory.get("occasion") or {}))
+    raw_occ = memory.get("occasion") if isinstance(memory, dict) and isinstance(memory.get("occasion"), dict) else memory
+    occ = sanitize_timing_fields(dict(raw_occ or {}))
 
     place = (
         (occ.get("place") or "")
         or (occ.get("locationPreference") or "")
     ).strip()
     setting = (occ.get("settingPreference") or "").strip()
+
     has_place = bool(place)
     has_time = is_concrete_timing(occ)
 

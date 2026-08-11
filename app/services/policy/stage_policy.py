@@ -41,7 +41,8 @@ SPECIFICITY LEVEL (output validationNotes.specificityLevel):
 - IL3: Exact city & dates (e.g. "Goa, Dec 18-20 2026", "Udaipur, Feb 12-14 2026", "Phuket first week of December 2026")
 
 Extract into validatedPatch.occasion (only fields that are mentioned):
-- place: real wedding destination — city, region, or venue name (e.g. "Delhi", "Goa", "East Asia", "Thailand or Bali", "Udaipur")
+- place: real wedding destination — city, region, country, or venue name (e.g. "Delhi", "Goa", "East Asia", "Nathia Gali", "Aspen", "Rocky Mountains", "Lahore")
+  → DO NOT extract broad settings ("mountains", "beach", "coastal", "lakeside", "vineyard", "desert", "countryside") into place! Leave place EMPTY ("") for broad environment settings.
   → In validationNotes.resolvedCountry: identify the country
     Examples: "Lahore Fort" → Pakistan, "Delhi" → India, "Dubai" → UAE, "Goa" → India
 - datePreference: future date (day+month+year, month+year, or year e.g. "2029", "December 2028", "2035")
@@ -49,7 +50,7 @@ Extract into validatedPatch.occasion (only fields that are mentioned):
   → ONLY reject past dates (before $current_date) OR extreme far-future dates (more than 15 years in the future, e.g. year 3030, year 2099).
   → If rejected: exclude from validatedPatch, add to validationNotes.rejectedReasons: ["Date is in the past" or "Date is too far in the future (must be within 15 years)."]
 - seasonPreference: ONLY when user names a season ("Winter wedding", "Summer celebration", "Monsoon")
-- settingPreference: beach / palace / garden / indoor / outdoor — only when explicitly stated
+- settingPreference: beach / mountains / palace / garden / indoor / outdoor / lakeside / vineyard / desert — only when explicitly stated
 - destinationMode: "destination" (away from home) | "local" (same city) | "unknown"
 
 Also extract into earlySignals (NOT validatedPatch):

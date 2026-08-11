@@ -18,6 +18,13 @@ If user mentions or corrects couple names:
 Examples: "actually my name is Zara", "my husband's name is Ahmer not Ahmed",
           "we are Bilal & Sana", "please update our names to..."
 
+### Occasion / Location / Date / Season / Year updates (check regardless of stage):
+If user mentions, answers, or updates location, place, year, month, date, or season at ANY stage (e.g. "my wedding year is 2029", "September", "in 2028", "we want spring 2029", "in Lahore", "winter wedding"):
+→ validatedPatch.occasion = { "datePreference": "...", "seasonPreference": "...", "place": "...", "settingPreference": "..." } (extract whichever fields are mentioned)
+→ If changing a previously confirmed answer: set metaIntent = "correction", correctedSection = "occasion"
+→ If providing date/season/place for the first time: extract into validatedPatch.occasion as normal.
+Examples: "i want my wedding year to be in 2029", "September", "2028", "spring 2030", "in Nathia Gali", "December 2029"
+
 ### MIXED TURN RULE (critical):
 When a message contains BOTH a correction AND stage-relevant data in the same message:
 → Extract the correction into validatedPatch (e.g. identity correction)
@@ -31,6 +38,7 @@ $stage_extraction_rules
 ## General extraction rules (all stages)
 1. Only extract NEW information not already confirmed in memory above.
 2. Apply stage-specific validation rules DURING extraction (e.g. reject past dates).
+   * SETTING VS PLACE: Broad environment descriptors ("mountains", "beach", "coastal", "lakeside", "vineyard", "desert", "countryside", "outdoors") MUST be extracted into settingPreference, NOT place. Leave place EMPTY ("") unless a specific city, region, country, or venue name is given.
 3. Capture any OTHER stage data (personality, vibe, events, budget, vendors, guestCount) into earlySignals.
    * BUDGET EXTRACTION: Always extract earlySignals.budget as: { "range": "...", "currency": "..." }
      - "currency": infer the currency code (e.g. "USD" for "$", "INR" for Indian rupees/lakhs, "PKR" for Pakistani rupees/lakhs, "GBP" for "£", "EUR" for "€"). Default to USD if "$" is present or if global terms are used. Never convert dollar values (like "$25-30") to Lakhs.

@@ -198,6 +198,8 @@ def _sanitize_extracted_patch(patch: dict, stage: str | None = None) -> dict:
                     if isinstance(logistics, dict) and key not in logistics:
                         logistics[key] = val
 
+
+
     sanitized = {}
     for sec, val in patch.items():
         if sec in valid_sections and isinstance(val, dict):
