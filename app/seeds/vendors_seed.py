@@ -60,10 +60,10 @@ VENDORS: list[dict] = [
         "vendor_type": "decor",
         "primary_city": "Delhi",
         "primary_region": "Delhi NCR",
-        "short_description": "Premium floral and décor studio known for editorial-quality design and restrained luxury.",
+        "short_description": "Premium floral and decor studio known for editorial-quality design and restrained luxury.",
         "profile_json": {
             "contact": {"name": "Studio Team", "email": "hello@devikanarain.com", "phone": "+91-98100-00001", "websiteUrl": "https://devikanarain.com", "instagramHandle": "@devikanarainstudio"},
-            "services": [{"serviceId": "v1", "category": "decor", "serviceName": "Full Wedding Décor", "description": "Concept to execution — florals, draping, lighting, and set design.", "pricingModel": "custom_quote", "startingPriceAmount": 500000, "maxPriceAmount": 8000000, "currencyCode": "INR", "serviceAreas": ["Pan India", "International"], "packages": ["Consultation Only", "Full Service"], "styleTags": ["editorial", "minimal luxury", "floral-heavy", "intimate"], "occasionTags": ["all events"], "capacityNotes": "Takes limited projects per season"}],
+            "services": [{"serviceId": "v1", "category": "decor", "serviceName": "Full Wedding Decor", "description": "Concept to execution — florals, draping, lighting, and set design.", "pricingModel": "custom_quote", "startingPriceAmount": 500000, "maxPriceAmount": 8000000, "currencyCode": "INR", "serviceAreas": ["Pan India", "International"], "packages": ["Consultation Only", "Full Service"], "styleTags": ["editorial", "minimal luxury", "floral-heavy", "intimate"], "occasionTags": ["all events"], "capacityNotes": "Takes limited projects per season"}],
             "portfolio": [],
             "availability": {"status": "active", "notes": "Book 9-12 months ahead for winter"},
             "businessMeta": {"languages": ["English", "Hindi"], "travelPolicy": "Pan India + international at cost", "preferredClientTypes": ["design-conscious", "intimate weddings", "editorial"]}
@@ -73,11 +73,11 @@ VENDORS: list[dict] = [
     },
     {
         "slug": "shaadi-squad-decor",
-        "name": "Shaadi Squad Décor",
+        "name": "Shaadi Squad Decor",
         "vendor_type": "decor",
         "primary_city": "Mumbai",
         "primary_region": "Maharashtra",
-        "short_description": "Mumbai-based full-service décor team specialising in grand Indian weddings and sangeets.",
+        "short_description": "Mumbai-based full-service decor team specialising in grand Indian weddings and sangeets.",
         "profile_json": {
             "contact": {"name": "Rajan Mehta", "email": "rajan@shaadisquad.in", "phone": "+91-98200-00002", "websiteUrl": "", "instagramHandle": "@shaadisquaddecor"},
             "services": [{"serviceId": "v1", "category": "decor", "serviceName": "Grand Wedding Package", "description": "All-inclusive floral, draping, stage, and lighting for all functions.", "pricingModel": "per_event", "startingPriceAmount": 400000, "maxPriceAmount": 3000000, "currencyCode": "INR", "serviceAreas": ["Mumbai", "Pune", "Goa"], "packages": ["Economy", "Premium", "Grand"], "styleTags": ["grand", "festive", "Bollywood-inspired"], "occasionTags": ["mehendi", "sangeet", "reception"], "capacityNotes": "Handles 200-2000 guest events"}],

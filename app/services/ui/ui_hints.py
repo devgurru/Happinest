@@ -21,22 +21,22 @@ CHIP_STAGES = {
 
 # Vendor category chips grouped by event (aligned with product screens)
 EVENT_VENDOR_CHIPS: dict[str, list[str]] = {
-    "mehndi": ["Mehendi artist", "Catering", "Décor", "Photography"],
-    "mehendi": ["Mehendi artist", "Catering", "Décor", "Photography"],
-    "haldi": ["Haldi setup", "Catering", "Décor", "Florals"],
-    "ubtan": ["Haldi setup", "Catering", "Décor", "Florals"],
+    "mehndi": ["Mehendi artist", "Catering", "Decor", "Photography"],
+    "mehendi": ["Mehendi artist", "Catering", "Decor", "Photography"],
+    "haldi": ["Haldi setup", "Catering", "Decor", "Florals"],
+    "ubtan": ["Haldi setup", "Catering", "Decor", "Florals"],
     "sangeet": ["Stage and sound", "Sangeet performers", "Catering", "DJ and entertainment"],
     "nikkah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
     "nikah": ["Imam / Qazi", "Florals", "Photography", "Catering"],
     "baraat": ["Baraat coordinator", "Band & Dhol", "Photography", "Catering"],
-    "walima": ["Venue & Décor", "Catering", "Photography", "Stage Setup"],
+    "walima": ["Venue & Decor", "Catering", "Photography", "Stage Setup"],
     "wedding ceremony": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
     "wedding": ["Pandit", "Baraat coordinator", "Photography", "Florals", "Catering"],
-    "reception": ["Photography", "Catering", "DJ and entertainment", "Décor"],
-    "engagement": ["Photography", "Décor", "Catering", "Ring Stage Setup"],
-    "ring ceremony": ["Décor", "Photography", "Catering"],
-    "cocktail night": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
-    "cocktail": ["Bar and beverages", "DJ and entertainment", "Décor", "Catering"],
+    "reception": ["Photography", "Catering", "DJ and entertainment", " Decor"],
+    "engagement": ["Photography", "Decor", "Catering", "Ring Stage Setup"],
+    "ring ceremony": ["Decor", "Photography", "Catering"],
+    "cocktail night": ["Bar and beverages", "DJ and entertainment", "Decor", "Catering"],
+    "cocktail": ["Bar and beverages", "DJ and entertainment", "Decor", "Catering"],
     "after party": ["DJ and entertainment", "Bar and beverages", "Lighting"],
 }
 
@@ -47,7 +47,7 @@ def get_vendors_for_event(event_name: str) -> list[str]:
     for pattern, vendors in EVENT_VENDOR_CHIPS.items():
         if pattern in key:
             return vendors[:5]
-    return ["Photography", "Catering", "Décor", "Florals"]
+    return ["Photography", "Catering", "Decor", "Florals"]
 
 
 def build_vendor_suggestions_by_event(events: list[str]) -> dict[str, list[str]]:

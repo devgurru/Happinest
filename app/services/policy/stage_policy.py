@@ -227,10 +227,26 @@ Extract into validatedPatch.logistics:
   Only include events listed in memory.logistics.events.
   Examples:
     {
-      "Mehndi": ["Mehendi artist", "Catering", "Décor"],
+      "Mehndi": ["Mehendi artist", "Catering", "Decor"],
       "Sangeet": ["Stage and sound", "Sangeet performers", "DJ and entertainment"],
-      "Haldi": ["Haldi setup", "Catering", "Décor"]
+      "Haldi": ["Haldi setup", "Catering", "Decor"]
     }
+
+VENDOR SELECTION from recommendations:
+- If user selects/picks a specific vendor from the recommendation list, extract:
+  vendorSelections: { "VendorType": { "id": "...", "slug": "...", "name": "..." } }
+  Example: "I'll go with Mughlai Caterers" → { "Caterer": { "name": "Mughlai Caterers" } }
+
+SHOW MORE VENDORS:
+- If user asks to see more vendor options ("show more", "more suggestions", "next vendors"):
+  → set metaIntent to "more_suggestions"
+  → extract moreVendorsFor: "all" (all types) or specific vendor type name
+    Example: "show more photographers" → moreVendorsFor: "Photographer"
+    Example: "show more options" → moreVendorsFor: "all"
+
+CONFIRM VENDORS:
+- Stage auto-advances once ALL recommendation categories have a selected vendor.
+  No explicit confirm action is needed.
 
 EARLY SIGNALS CONFIRMATION: If earlySignals.vendors has values in memory AND user confirms →
 extract earlySignals.vendors into validatedPatch.logistics.vendorPreferences.""",
@@ -475,7 +491,15 @@ class StagePolicy:
 
         if stage_id == StageId.S10_VENDORS:
             prefs = memory.get("logistics", {}).get("vendorPreferences") or {}
-            return isinstance(prefs, dict) and len(prefs) >= 1
+            offsets = memory.get("logistics", {}).get("vendorOffsets") or {}
+            selections = memory.get("logistics", {}).get("vendorSelections") or {}
+            if not isinstance(prefs, dict) or len(prefs) < 1:
+                return False
+            # S10 is complete when recommendations have been shown AND
+            # every recommendation category has a selected vendor
+            if not offsets:
+                return False
+            return all(vtype in selections for vtype in offsets)
 
         return False
 

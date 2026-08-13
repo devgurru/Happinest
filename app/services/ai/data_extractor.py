@@ -44,6 +44,9 @@ class ExtractionResult:
     corrected_section: str | None = None
     validation_notes: dict = field(default_factory=dict)
     extraction_summary: str = ""
+    more_vendors_for: str | None = None
+    vendor_selections: dict = field(default_factory=dict)
+    vendors_confirmed: bool = False
 
     def is_meta(self) -> bool:
         return self.meta_intent in ("help", "more_suggestions", "gibberish")
@@ -92,8 +95,20 @@ class ExtractionResult:
             except (ValueError, TypeError):
                 pass
 
-        if meta_intent in ("help", "more_suggestions", "gibberish"):
+        if meta_intent in ("help", "gibberish"):
             early_signals = {"personality": [], "vibe": [], "events": [], "budget": {}, "vendors": {}}
+        elif meta_intent == "more_suggestions":
+            # Preserve moreVendorsFor on more_suggestions turns
+            early_signals = {"personality": [], "vibe": [], "events": [], "budget": {}, "vendors": {}}
+
+        # Parse vendor-specific S10 fields
+        more_vendors_for = raw_es.get("moreVendorsFor")
+        if more_vendors_for and not isinstance(more_vendors_for, str):
+            more_vendors_for = None
+        vendor_selections = raw_es.get("vendorSelections") or {}
+        if not isinstance(vendor_selections, dict):
+            vendor_selections = {}
+        vendors_confirmed = bool(raw_es.get("vendorsConfirmed", False))
 
         # Normalise events in validated patch
         logistics = validated_patch.get("logistics") or {}
@@ -129,6 +144,9 @@ class ExtractionResult:
             corrected_section=corrected_section,
             validation_notes=validation_notes,
             extraction_summary=extraction_summary,
+            more_vendors_for=more_vendors_for,
+            vendor_selections=vendor_selections,
+            vendors_confirmed=vendors_confirmed,
         )
 
     @classmethod
@@ -179,7 +197,7 @@ def _sanitize_extracted_patch(patch: dict, stage: str | None = None) -> dict:
         "vibe": {"primaryVibe", "secondaryVibes", "energyLevel", "formality", "familyRole", "plannerInterpretation"},
         "brief": {"status", "text", "quote", "version", "generatedFromMemoryVersion"},
         "direction": {"status", "selectedDirectionId", "options", "seenOptionIds", "selectedDirectionName", "version", "generatedFromMemoryVersion"},
-        "logistics": {"events", "guestCounts", "budget", "vendorPreferences", "eventsConfirmed"},
+        "logistics": {"events", "guestCounts", "budget", "vendorPreferences", "vendorSelections", "vendorOffsets", "eventsConfirmed"},
         "summary": {"status", "text", "version", "generatedFromMemoryVersion"}
     }
 

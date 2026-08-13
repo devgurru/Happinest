@@ -55,6 +55,8 @@ DEFAULT_PLANNER_MEMORY: dict = {
         "guestCounts": {},
         "budget": {},
         "vendorPreferences": {},
+        "vendorSelections": {},
+        "vendorOffsets": {},
     },
     "summary": {
         "status": "not_started",

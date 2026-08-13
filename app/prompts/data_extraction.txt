@@ -85,7 +85,9 @@ $stage_extraction_rules
     "events": [],
     "budget": {},
     "guestCount": null,
-    "vendors": {}
+    "vendors": {},
+    "moreVendorsFor": null,
+    "vendorSelections": {}
   },
   "metaIntent": "normal",
   "correctedSection": null,

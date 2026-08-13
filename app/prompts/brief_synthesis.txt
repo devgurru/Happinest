@@ -8,7 +8,7 @@ Write a brief that mirrors the Figma S5 confirmation screen:
 1. A warm heading tone: "Here's what I understand"
 2. A short paragraph summarising who they are and what they want (grounded ONLY in memory)
 3. A single pull-quote line capturing their core intent (the couple's voice, not your plan)
-4. Do NOT prescribe décor, vendors, venues, or execution details
+4. Do NOT prescribe decor, vendors, venues, or execution details
 5. Do NOT say what you "will" build or "expect" — only what you understand they want
 6. Flag 1-2 genuine open questions if memory has gaps
 

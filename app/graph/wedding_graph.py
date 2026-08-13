@@ -314,7 +314,26 @@ async def process_conversation_turn(
             validation_status="rejected",
             failure_code=error_code or "UNKNOWN",
         )
-        return make_error_response(request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED")
+        artifact_content = None
+        if stage == StageId.S10_VENDORS.value:
+            from app.services.ai.vendor_search import load_vendor_recommendations
+            from app.services.ui.ui_hints import build_vendor_suggestions_by_event
+            logistics = memory.get("logistics") or {}
+            events = logistics.get("events") or []
+            counts = logistics.get("guestCounts") or {}
+            budget = logistics.get("budget") or {}
+            vendor_prefs = logistics.get("vendorPreferences") or {}
+            vendor_recs = await load_vendor_recommendations(db, session_id, memory)
+            event_suggestions = build_vendor_suggestions_by_event(events)
+            artifact_content = {
+                "events": events,
+                "guestCounts": counts,
+                "budget": budget,
+                "eventVendorSuggestions": event_suggestions,
+                "vendorPreferences": vendor_prefs,
+                "vendorRecommendations": vendor_recs,
+            }
+        return make_error_response(request_id, session_id, stage, memory, error_code or "AI_CALL_FAILED", artifact_content=artifact_content)
 
     # ── Sanitize AI response ──────────────────────────────────────────────────
     ai_result = sanitize_ai_response(ai_result, stage)
@@ -348,7 +367,26 @@ async def process_conversation_turn(
             validation_status="rejected",
             failure_code=val_error,
         )
-        return make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}")
+        artifact_content = None
+        if stage == StageId.S10_VENDORS.value:
+            from app.services.ai.vendor_search import load_vendor_recommendations
+            from app.services.ui.ui_hints import build_vendor_suggestions_by_event
+            logistics = memory.get("logistics") or {}
+            events = logistics.get("events") or []
+            counts = logistics.get("guestCounts") or {}
+            budget = logistics.get("budget") or {}
+            vendor_prefs = logistics.get("vendorPreferences") or {}
+            vendor_recs = await load_vendor_recommendations(db, session_id, memory)
+            event_suggestions = build_vendor_suggestions_by_event(events)
+            artifact_content = {
+                "events": events,
+                "guestCounts": counts,
+                "budget": budget,
+                "eventVendorSuggestions": event_suggestions,
+                "vendorPreferences": vendor_prefs,
+                "vendorRecommendations": vendor_recs,
+            }
+        return make_error_response(request_id, session_id, stage, memory, f"VALIDATION_FAILED:{val_error}", artifact_content=artifact_content)
 
     # ── Phase 5: Apply AI memory patch + resolve stage ────────────────────────
     ai_patch = ai_result.get("memoryPatch") or {}
@@ -413,6 +451,102 @@ async def process_conversation_turn(
     # ── Auto-synthesis chains ──────────────────────────────────────────────────
     synthesis_result = None
     combined_patch = {**extraction_patch, **additional_patch}
+
+    # ── S10 Vendor Recommendations ─────────────────────────────────────────────
+    if stage == StageId.S10_VENDORS.value and final_stage == StageId.S10_VENDORS.value:
+        vendor_prefs = memory.get("logistics", {}).get("vendorPreferences") or {}
+        vendor_offsets = memory.get("logistics", {}).get("vendorOffsets") or {}
+
+        from app.services.ai.vendor_search import (
+            get_vendor_recommendations, extract_unique_db_vendor_types,
+            get_available_vendor_types, save_vendor_recommendations,
+            has_session_vendor_recommendations, load_vendor_recommendations,
+        )
+
+        # Handle vendor selections from user
+        if extraction.vendor_selections:
+            existing_selections = memory.get("logistics", {}).get("vendorSelections") or {}
+            for vtype, sel in extraction.vendor_selections.items():
+                if isinstance(sel, dict):
+                    existing_selections[vtype] = sel
+            sel_patch = {"logistics": {"vendorSelections": existing_selections}}
+            sel_mem = await MemoryService.apply_patch(db, session, sel_patch, request_id=request_id)
+            memory = sel_mem.memory_json
+            version_no = sel_mem.version_no
+            # Re-evaluate stage decision — auto-advance when all categories have a selection
+            final_decision_type, final_stage, _reason = StagePolicy.resolve_final_decision_with_memory(
+                ai_decision_type, ai_to_stage, stage, memory,
+            )
+            if final_stage != stage:
+                await SessionService.update_stage(
+                    db, session,
+                    new_stage=final_stage,
+                    decision_type=final_decision_type,
+                    request_id=request_id,
+                )
+
+        # Handle "show more" requests
+        elif extraction.more_vendors_for and await has_session_vendor_recommendations(db, session_id):
+            more_for = extraction.more_vendors_for
+            
+            # Find the vendor types we currently have recommendations for in the database
+            current_recs = await load_vendor_recommendations(db, session_id, memory)
+            if current_recs:
+                if more_for == "all":
+                    types_to_refresh = list(current_recs.keys())
+                else:
+                    # Find matching vendor type (case-insensitive)
+                    types_to_refresh = [
+                        vt for vt in current_recs.keys()
+                        if vt.lower() == more_for.lower() or more_for.lower() in vt.lower()
+                    ]
+                    if not types_to_refresh:
+                        types_to_refresh = list(current_recs.keys())
+
+                # Build offsets from current state
+                offsets = {vt: vendor_offsets.get(vt, 0) for vt in types_to_refresh}
+                try:
+                    new_recs = await get_vendor_recommendations(
+                        db, memory, types_to_refresh, offsets=offsets, top_k=3,
+                    )
+                    # Save new recommendations to the database (which will overwrite the old ones for these types)
+                    await save_vendor_recommendations(db, session_id, new_recs, version_no, request_id)
+                    
+                    # Update offsets in memory
+                    for vt, rec in new_recs.items():
+                        vendor_offsets[vt] = rec.get("offset", 0)
+                    offset_patch = {"logistics": {"vendorOffsets": vendor_offsets}}
+                    offset_mem = await MemoryService.apply_patch(db, session, offset_patch, request_id=request_id)
+                    memory = offset_mem.memory_json
+                    version_no = offset_mem.version_no
+                except Exception as _ve:
+                    import logging
+                    logging.getLogger(__name__).warning("Vendor 'show more' failed: %s", _ve)
+
+        # First-time recommendations: vendor prefs set but no recommendations yet
+        elif vendor_prefs and not await has_session_vendor_recommendations(db, session_id):
+            try:
+                all_db_types = extract_unique_db_vendor_types(vendor_prefs)
+                available_types = await get_available_vendor_types(db)
+                matchable_types = [vt for vt in all_db_types if vt in available_types]
+
+                if matchable_types:
+                    recommendations = await get_vendor_recommendations(
+                        db, memory, matchable_types, top_k=3,
+                    )
+                    # Save recommendations to database
+                    await save_vendor_recommendations(db, session_id, recommendations, version_no, request_id)
+                    
+                    # Store offsets in memory
+                    initial_offsets = {vt: rec.get("offset", 3) for vt, rec in recommendations.items()}
+                    offset_patch = {"logistics": {"vendorOffsets": initial_offsets}}
+                    offset_mem = await MemoryService.apply_patch(db, session, offset_patch, request_id=request_id)
+                    memory = offset_mem.memory_json
+                    version_no = offset_mem.version_no
+            except Exception as _ve:
+                import logging
+                logging.getLogger(__name__).warning("Vendor recommendation generation failed: %s", _ve)
+
 
     # 1. S4→S5: Auto-brief synthesis when advancing to S5 for the first time
     is_s4_to_s5 = (
@@ -506,6 +640,27 @@ async def process_conversation_turn(
     )
 
     combined_patch = {**extraction_patch, **additional_patch}
+    
+    artifact_content = None
+    if effective_stage == StageId.S10_VENDORS.value:
+        from app.services.ai.vendor_search import load_vendor_recommendations
+        from app.services.ui.ui_hints import build_vendor_suggestions_by_event
+        logistics = memory.get("logistics") or {}
+        events = logistics.get("events") or []
+        counts = logistics.get("guestCounts") or {}
+        budget = logistics.get("budget") or {}
+        vendor_prefs = logistics.get("vendorPreferences") or {}
+        vendor_recs = await load_vendor_recommendations(db, session_id, memory)
+        event_suggestions = build_vendor_suggestions_by_event(events)
+        artifact_content = {
+            "events": events,
+            "guestCounts": counts,
+            "budget": budget,
+            "eventVendorSuggestions": event_suggestions,
+            "vendorPreferences": vendor_prefs,
+            "vendorRecommendations": vendor_recs,
+        }
+
     return response_dict(
         request_id, session_id, ResponseSource.OPENAI.value, planner_reply, memory,
         memory_patch=combined_patch,
@@ -514,4 +669,5 @@ async def process_conversation_turn(
         stale_sections=stale_sections,
         open_questions=open_questions,
         suggestions=suggestions,
+        artifact_content=artifact_content,
     )

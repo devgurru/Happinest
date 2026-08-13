@@ -51,6 +51,7 @@ def extract_brief_artifact_if_present(stage: str, memory: dict, artifact_content
         counts = logistics.get("guestCounts") or {}
         budget = logistics.get("budget") or {}
         vendor_prefs = logistics.get("vendorPreferences") or {}
+        vendor_recs = logistics.get("vendorRecommendations") or {}
         event_suggestions = build_vendor_suggestions_by_event(events)
         return {
             "events": events,
@@ -58,6 +59,7 @@ def extract_brief_artifact_if_present(stage: str, memory: dict, artifact_content
             "budget": budget,
             "eventVendorSuggestions": event_suggestions,
             "vendorPreferences": vendor_prefs,
+            "vendorRecommendations": vendor_recs,
         }
     return None
 
@@ -69,6 +71,7 @@ def make_error_response(
     memory: dict,
     error_code: str,
     message: str = "Something went wrong. Please try again.",
+    artifact_content: dict | None = None,
 ) -> dict:
     return {
         "requestId": str(request_id),
@@ -81,7 +84,7 @@ def make_error_response(
         "suggestions": [],
         "selectedChips": build_selected_chips(memory),
         "plannerNotesView": build_planner_notes_view(memory),
-        "artifactContent": extract_brief_artifact_if_present(stage, memory, None),
+        "artifactContent": extract_brief_artifact_if_present(stage, memory, artifact_content),
         "errorCode": error_code,
     }
 
