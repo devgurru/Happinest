@@ -39,6 +39,45 @@ async def embed_text(text_input: str) -> list[float]:
         return data["data"][0]["embedding"]
 
 
+async def embed_texts_batch(texts: list[str], batch_size: int = 2000) -> list[list[float]]:
+    """
+    Generate embedding vectors for a list of texts in batches via OpenAI embedding API.
+    OpenAI supports up to 2048 texts per request. We use batch_size=2000 by default.
+    Returns a list of embedding vectors in the same order as the input texts.
+    """
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not set in environment (.env)")
+    base_url = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+    url = f"{base_url}/embeddings"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    model_name = settings.OPENAI_EMBEDDING_MODEL or "text-embedding-3-small"
+
+    all_embeddings: list[list[float]] = []
+
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start : start + batch_size]
+        payload = {
+            "model": model_name,
+            "input": chunk,
+        }
+        if "text-embedding-3" in model_name.lower():
+            payload["dimensions"] = 768
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # OpenAI returns embeddings sorted by index, but let's be safe
+        sorted_items = sorted(data["data"], key=lambda x: x["index"])
+        all_embeddings.extend([item["embedding"] for item in sorted_items])
+
+    return all_embeddings
+
 
 def build_memory_search_text(memory: dict) -> str:
     """

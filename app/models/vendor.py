@@ -9,6 +9,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
+try:
+    from pgvector.sqlalchemy import Vector
+    _HAS_PGVECTOR = True
+except ImportError:
+    _HAS_PGVECTOR = False
+
+
 class Vendor(Base):
     __tablename__ = "vendors"
 
@@ -29,6 +36,12 @@ class Vendor(Base):
 
     # Review aggregates
     rating_summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # Semantic Vector Embedding for AI Recommendation Search (768-dim for nomic-embed-text)
+    if _HAS_PGVECTOR:
+        embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+    else:
+        embedding = None  # type: ignore[assignment]
 
     is_preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

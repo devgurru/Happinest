@@ -18,14 +18,25 @@ def _require_debug():
 async def seed_reference_data(db: AsyncSession = Depends(get_db)):
     """Re-run seed loader (idempotent). DEBUG only."""
     _require_debug()
-    # Seed runs its own engine — just confirm it works
-    import asyncio
-    await asyncio.get_event_loop().run_in_executor(None, lambda: None)
     from app.seeds.seed_runner import seed_event_sites, seed_vendors
     async with db.begin():
         await seed_event_sites(db)
         await seed_vendors(db)
     return {"status": "ok", "message": "Seed complete"}
+
+
+@router.post("/seed-csv-vendors")
+async def seed_csv_vendors_endpoint(force_update: bool = False):
+    """Re-run CSV Vendors importer (idempotent). from live db csv data """
+    _require_debug()
+    import sys
+    from pathlib import Path
+    backend_dir = Path(__file__).resolve().parents[2]
+    if str(backend_dir) not in sys.path:
+        sys.path.insert(0, str(backend_dir))
+    from scripts.seed_csv_vendors import seed_csv_vendors
+    result = await seed_csv_vendors(force_update=force_update)
+    return {"status": "ok", **result}
 
 
 @router.post("/embed-sites")
