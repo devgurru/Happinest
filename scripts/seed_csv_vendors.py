@@ -74,7 +74,12 @@ def parse_json_field(val: object) -> object:
 # CSV Parser
 # ---------------------------------------------------------------------------
 
-def parse_vendor_csv(file_path: str) -> list[dict]:
+def parse_vendor_csv(file_path: str, existing_map: dict = None, all_slugs_in_use: set = None) -> list[dict]:
+    if existing_map is None:
+        existing_map = {}
+    if all_slugs_in_use is None:
+        all_slugs_in_use = set()
+
     df = pd.read_csv(file_path)
     records = []
     seen_slugs: set[str] = set()
@@ -82,6 +87,10 @@ def parse_vendor_csv(file_path: str) -> list[dict]:
     for idx, row in df.iterrows():
         raw_v_id = row.get("vendor_id")
         if pd.isna(raw_v_id):
+            continue
+        try:
+            raw_v_id = int(raw_v_id)
+        except (ValueError, TypeError):
             continue
 
         raw_name = _clean_str(row.get("vendor_name")) or f"Vendor {raw_v_id}"
@@ -96,21 +105,25 @@ def parse_vendor_csv(file_path: str) -> list[dict]:
         else:
             region = country
 
-        raw_slug = _clean_str(row.get("slug")) or _slugify(raw_name)
-        cat_slug_part = cat_name.lower().replace(" ", "-").replace("/", "-")
-        base_slug = _slugify(f"{raw_slug}-{cat_slug_part}")
-        if not base_slug:
-            base_slug = f"vendor-{raw_v_id}"
+        # Determine ID and Slug
+        if (raw_v_id, cat_name) in existing_map:
+            vendor_uuid, slug = existing_map[(raw_v_id, cat_name)]
+        else:
+            raw_slug = _clean_str(row.get("slug")) or _slugify(raw_name)
+            cat_slug_part = cat_name.lower().replace(" ", "-").replace("/", "-")
+            base_slug = _slugify(f"{raw_slug}-{cat_slug_part}")
+            if not base_slug:
+                base_slug = f"vendor-{raw_v_id}"
 
-        slug = base_slug
-        counter = 1
-        while slug in seen_slugs:
-            slug = f"{base_slug[:80]}-{counter}"
-            counter += 1
-        seen_slugs.add(slug)
+            slug = base_slug
+            counter = 1
+            while slug in all_slugs_in_use or slug in seen_slugs:
+                slug = f"{base_slug[:80]}-{counter}"
+                counter += 1
+            seen_slugs.add(slug)
 
-        # Deterministic UUID primary key
-        vendor_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"vendor-{raw_v_id}-{slug}")
+            # Deterministic UUID primary key
+            vendor_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"vendor-{raw_v_id}-{slug}")
 
         desc = _clean_str(row.get("description")) or f"{raw_name} is a premier {cat_name} vendor serving {city}, {region}."
         is_premium = _clean_bool(row.get("is_premium"))
@@ -121,7 +134,7 @@ def parse_vendor_csv(file_path: str) -> list[dict]:
         category_data = parse_json_field(row.get("category_data"))
 
         profile_json = {
-            "vendor_id": int(raw_v_id),
+            "vendor_id": raw_v_id,
             "tags": tags_data,
             "pricing": pricing_data,
             "category_data": category_data,
@@ -201,10 +214,6 @@ async def seed_csv_vendors(csv_path: str | None = None, force_update: bool = Fal
         print(f"ERROR: CSV file not found at {csv_path}", flush=True)
         return
 
-    print(f"Parsing vendors from {csv_path}...", flush=True)
-    vendors_data = parse_vendor_csv(csv_path)
-    print(f"Successfully parsed {len(vendors_data)} CSV vendor records.", flush=True)
-
     # ---- DB setup ----
     engine = create_async_engine(settings.DATABASE_URL, echo=False)
     async with engine.begin() as conn:
@@ -214,10 +223,36 @@ async def seed_csv_vendors(csv_path: str | None = None, force_update: bool = Fal
 
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    # ---- Pre-fetch existing vendors for O(1) lookup ----
+    # ---- Pre-fetch existing vendors and slugs for O(1) mapping and lookup ----
     async with SessionLocal() as session:
-        result = await session.execute(select(Vendor.id))
-        existing_ids = {row[0] for row in result.all()}
+        result = await session.execute(select(Vendor.id, Vendor.slug, Vendor.profile_json, Vendor.vendor_type))
+        rows = result.all()
+        existing_ids = {row[0] for row in rows}
+        
+        existing_map = {}
+        all_slugs_in_use = set()
+        for row in rows:
+            v_id = None
+            if isinstance(row.profile_json, dict):
+                v_id = row.profile_json.get("vendor_id")
+            elif isinstance(row.profile_json, str):
+                try:
+                    p = json.loads(row.profile_json)
+                    v_id = p.get("vendor_id")
+                except Exception:
+                    pass
+            if v_id is not None:
+                try:
+                    v_id = int(v_id)
+                    existing_map[(v_id, row.vendor_type)] = (row.id, row.slug)
+                except (ValueError, TypeError):
+                    pass
+            if row.slug:
+                all_slugs_in_use.add(row.slug)
+
+    print(f"Parsing vendors from {csv_path}...", flush=True)
+    vendors_data = parse_vendor_csv(csv_path, existing_map=existing_map, all_slugs_in_use=all_slugs_in_use)
+    print(f"Successfully parsed {len(vendors_data)} CSV vendor records.", flush=True)
 
     # ---- Separate new vs existing, skip already-embedded ----
     to_insert = []
