@@ -192,18 +192,26 @@ def parse_vendor_csv(file_path: str, existing_map: dict = None, all_slugs_in_use
 async def seed_csv_vendors(csv_path: str | None = None, force_update: bool = False) -> dict:
     # ---- Resolve CSV path ----
     if not csv_path:
-        candidates = [
-            os.path.join(BACKEND_DIR, "vendor_seed_data", "vendor_data_form_db.csv"),
-            os.path.join(BACKEND_DIR.parent, "vendor_seed_data", "vendor_data_form_db.csv"),
-            os.path.join(BACKEND_DIR.parent, "vendor_data_form_db.csv"),
-        ]
-        # Also scan any .csv in vendor_seed_data folders
+        candidates = []
+        # Scan any .csv in vendor_seed_data folders
         for base in [BACKEND_DIR, BACKEND_DIR.parent]:
             seed_dir = os.path.join(base, "vendor_seed_data")
             if os.path.isdir(seed_dir):
-                for fname in os.listdir(seed_dir):
-                    if fname.endswith(".csv"):
-                        candidates.insert(0, os.path.join(seed_dir, fname))
+                csv_files = [
+                    os.path.join(seed_dir, f)
+                    for f in os.listdir(seed_dir)
+                    if f.endswith(".csv")
+                ]
+                # Sort alphabetically in reverse so "v2" comes before "form"
+                csv_files.sort(key=lambda x: os.path.basename(x), reverse=True)
+                candidates.extend(csv_files)
+
+        # Fallback default candidates
+        candidates.extend([
+            os.path.join(BACKEND_DIR, "vendor_seed_data", "vendor_data_form_db.csv"),
+            os.path.join(BACKEND_DIR.parent, "vendor_seed_data", "vendor_data_form_db.csv"),
+            os.path.join(BACKEND_DIR.parent, "vendor_data_form_db.csv"),
+        ])
 
         for cand in candidates:
             if os.path.exists(cand):
